@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS rooms (
   floor TEXT,
   address TEXT,
   rent INTEGER NOT NULL DEFAULT 0,
+  electricity_bill INTEGER NOT NULL DEFAULT 0,
   notes TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -240,6 +241,7 @@ async function init() {
   }
   // Add newer columns to databases created before they existed.
   await ensureColumn('rooms', 'address', 'TEXT');
+  await ensureColumn('rooms', 'electricity_bill', 'INTEGER NOT NULL DEFAULT 0');
   await seedIfEmpty();
 }
 

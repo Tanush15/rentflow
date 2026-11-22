@@ -444,10 +444,11 @@ function viewDashboard() {
 
 function viewRooms() {
   const elecFor = (id) => (S.electricity?.meters || []).find((m) => String(m.room_id) === String(id)) || {};
+  const canEdit = S.me && (S.me.role === 'admin' || S.me.role === 'super_admin');
   return `<div class="page-head"><div><h1>Rooms</h1><p>${S.rooms.length} rooms · ${S.rooms.filter((r) => r.tenant).length} occupied · address, rent &amp; electricity in one place</p></div>
-    <button class="btn" data-act="add-room">＋ Add room</button></div>
+    ${canEdit ? '<button class="btn" data-act="add-room">＋ Add room</button>' : ''}</div>
   <div class="card"><div class="table-wrap"><table><thead><tr><th>Room</th><th>Complete address</th><th>Floor</th><th>Tenant</th>
-    <th class="num">Rent</th><th class="num">Electricity ${esc(String(S.electricity?.month || S.month).slice(5))}</th>
+    <th class="num">Rent</th><th class="num">Electricity bill (₹)</th>
     <th class="num">Collected</th><th class="num">Pending</th><th></th></tr></thead><tbody>
   ${S.rooms.map((r) => {
     const e = elecFor(r.id);
@@ -457,18 +458,22 @@ function viewRooms() {
       <td class="muted">${esc(r.floor || '-')}</td>
       <td>${r.tenant ? `<a href="#/tenants/${r.tenant.id}">${esc(r.tenant.name)}</a>` : '<span class="badge info">Vacant</span>'}</td>
       <td class="num">${money(r.rent)}</td>
-      <td class="num">${e.current_amount !== null && e.current_amount !== undefined
-        ? `${money(e.current_amount)}<br><span class="muted small">${fmtN(e.current_units)} units</span>`
-        : '<span class="muted">-</span>'}</td>
+      <td class="num">
+        ${canEdit
+          ? `<span class="bill-wrap"><span>₹</span><input type="number" class="bill-input" min="0" step="1" value="${esc(r.electricity_bill || 0)}" data-change="room-electricity-bill" data-id="${r.id}" aria-label="Electricity bill for room ${esc(r.room_no)}" title="Type the electricity bill in rupees, then press Tab or Enter"></span>`
+          : money(r.electricity_bill || 0)}
+        ${e.current_units !== null && e.current_units !== undefined
+          ? `<br><span class="muted small">reading ${fmtN(e.current_units)} units</span>` : ''}
+      </td>
       <td class="num">${r.tenant ? money(r.collected) : '-'}</td>
       <td class="num" style="color:${r.pending > 0 ? 'var(--red)' : 'inherit'};font-weight:600">${r.tenant ? money(r.pending) : '-'}</td>
       <td><div class="btn-row">${r.tenant ? `<button class="btn soft sm" data-act="open-payment" data-id="${r.tenant.id}">Collect</button>` : ''}
         ${e.meter_no ? `<button class="btn ghost sm" data-act="elec-history" data-id="${r.id}">Bill history</button>` : ''}
-        <button class="btn ghost sm" data-act="edit-room" data-id="${r.id}">Edit</button>
-        <button class="btn danger sm" data-act="del-room" data-id="${r.id}">Delete</button></div></td></tr>`;
+        ${canEdit ? `<button class="btn ghost sm" data-act="edit-room" data-id="${r.id}">Edit</button>
+        <button class="btn danger sm" data-act="del-room" data-id="${r.id}">Delete</button>` : ''}</div></td></tr>`;
   }).join('')}
   </tbody></table></div>
-  <div class="muted small" style="padding:0 16px 14px">Electricity figures are the saved readings for ${mlabel(S.electricity?.month || S.month)}. Manage meters and monthly readings on the <b>Electricity</b> page.</div>
+  <div class="muted small" style="padding:0 16px 14px">Admins can type each flat's electricity bill in rupees directly in the table — it saves automatically on Enter or when you click away. Monthly meter readings are tracked separately on the <b>Electricity</b> page.</div>
   </div>`;
 }
 
@@ -754,6 +759,7 @@ function openRoomModal(id) {
       <div class="field"><label>Floor</label><input name="floor" value="${esc(r.floor || '')}" placeholder="Ground / First…"></div>
       <div class="field full"><label>Complete address of this room</label><textarea name="address" rows="2" placeholder="House no., street, area, city, PIN — anything needed to find this room">${esc(r.address || '')}</textarea></div>
       <div class="field"><label>Monthly rent (₹) *</label><input type="number" name="rent" min="0" value="${esc(r.rent || '')}" required></div>
+      <div class="field"><label>Electricity bill (₹)</label><input type="number" name="electricity_bill" min="0" value="${esc(r.electricity_bill || 0)}"></div>
       <div class="field"><label>Notes</label><input name="notes" value="${esc(r.notes || '')}"></div>
     </form>`,
     foot: `<button class="btn ghost" data-act="close-modal">Cancel</button><button class="btn" data-act="submit-form" data-target="room">Save room</button>`,
@@ -1027,7 +1033,7 @@ const FORMS = {
     const id = v(f, 'id');
     await api(id ? `/rooms/${id}` : '/rooms', {
       method: id ? 'PUT' : 'POST',
-      body: { room_no: v(f, 'room_no'), floor: v(f, 'floor'), address: v(f, 'address'), rent: v(f, 'rent'), notes: v(f, 'notes') },
+      body: { room_no: v(f, 'room_no'), floor: v(f, 'floor'), address: v(f, 'address'), rent: v(f, 'rent'), electricity_bill: v(f, 'electricity_bill'), notes: v(f, 'notes') },
     });
     return 'Room saved.';
   },
@@ -1351,6 +1357,20 @@ FORMS['reset-password'] = async (f) => {
 };
 
 const CHANGES = {
+  'room-electricity-bill': async (el) => {
+    const amount = Math.max(0, Math.round(Number(el.value) || 0));
+    el.value = amount;
+    const room = S.rooms.find((r) => String(r.id) === el.dataset.id);
+    if (!room) return;
+    try {
+      await api(`/rooms/${el.dataset.id}`, { method: 'PUT', body: { electricity_bill: amount } });
+      room.electricity_bill = amount;
+      toast('Electricity bill saved.');
+    } catch (e) {
+      el.value = room.electricity_bill || 0;
+      toast(e.message, true);
+    }
+  },
   month: (el) => { S.month = el.value; loadData().then(renderView); },
   'payment-tenant': (el) => {
     const f = el.closest('form');

@@ -14,13 +14,13 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 router.post('/', auth.requireRole('admin', 'super_admin'), asyncHandler(async (req, res) => {
-  const { room_no, floor, address, rent, notes } = req.body || {};
+  const { room_no, floor, address, rent, electricity_bill, notes } = req.body || {};
   if (!room_no || !String(room_no).trim()) return res.status(400).json({ error: 'Room number is required.' });
   const exists = await db.get('SELECT id FROM rooms WHERE room_no = ?', [String(room_no).trim()]);
   if (exists) return res.status(400).json({ error: 'A room with that number already exists.' });
   const result = await db.run(
-    'INSERT INTO rooms (room_no, floor, address, rent, notes) VALUES (?, ?, ?, ?, ?) RETURNING id',
-    [String(room_no).trim(), floor || null, address || null, num(rent), notes || null]
+    'INSERT INTO rooms (room_no, floor, address, rent, electricity_bill, notes) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
+    [String(room_no).trim(), floor || null, address || null, num(rent), num(electricity_bill), notes || null]
   );
   await logActivity(req, 'created', 'room', result.lastId, `Room ${room_no}`);
   notify(req, 'rooms', 'created');
@@ -31,11 +31,14 @@ router.put('/:id', auth.requireRole('admin', 'super_admin'), asyncHandler(async 
   const id = req.params.id;
   const room = await db.get('SELECT * FROM rooms WHERE id = ?', [id]);
   if (!room) return res.status(404).json({ error: 'Room not found.' });
-  const { room_no, floor, address, rent, notes } = req.body || {};
+  const { room_no, floor, address, rent, electricity_bill, notes } = req.body || {};
   await db.run(
-    'UPDATE rooms SET room_no = ?, floor = ?, address = ?, rent = ?, notes = ? WHERE id = ? RETURNING id',
+    `UPDATE rooms SET room_no = ?, floor = ?, address = ?, rent = ?, electricity_bill = ?, notes = ?
+     WHERE id = ? RETURNING id`,
     [room_no || room.room_no, floor ?? room.floor, address ?? room.address,
-      rent !== undefined ? num(rent) : room.rent, notes ?? room.notes, id]
+      rent !== undefined ? num(rent) : room.rent,
+      electricity_bill !== undefined ? num(electricity_bill) : room.electricity_bill,
+      notes ?? room.notes, id]
   );
   await logActivity(req, 'updated', 'room', id, `Room ${room_no || room.room_no}`);
   notify(req, 'rooms', 'updated');
