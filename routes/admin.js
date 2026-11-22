@@ -12,8 +12,8 @@ router.use(auth.authRequired);
 // A marker is stored so the demo seed never repopulates an emptied database.
 router.post('/clear-demo-data', auth.requireRole('super_admin'), asyncHandler(async (req, res) => {
   for (const table of [
-    'electricity_readings', 'electricity_meters', 'dues', 'payments',
-    'files', 'tenants', 'expenses', 'rooms',
+    'electricity_readings', 'electricity_meters', 'room_electricity_bills',
+    'dues', 'payments', 'files', 'tenants', 'expenses', 'rooms',
   ]) {
     await db.run(`DELETE FROM ${table}`);
   }

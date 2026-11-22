@@ -89,6 +89,17 @@ CREATE TABLE IF NOT EXISTS rooms (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS room_electricity_bills (
+  id ${ID},
+  room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  month TEXT NOT NULL,
+  amount INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(room_id, month)
+);
+
+CREATE INDEX IF NOT EXISTS idx_room_bills_month ON room_electricity_bills(month);
+
 CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT
@@ -232,6 +243,24 @@ async function ensureColumn(table, column, type) {
   if (!exists) await run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }
 
+// One-time move of the old single "current bill" value into the per-month table.
+async function migrateLegacyBills() {
+  const done = await get("SELECT value FROM app_meta WHERE key = 'bills_migrated'");
+  if (done) return;
+  const month = new Date().toISOString().slice(0, 7);
+  const rooms = await query('SELECT id, electricity_bill FROM rooms WHERE electricity_bill > 0');
+  for (const room of rooms) {
+    const existing = await get(
+      'SELECT id FROM room_electricity_bills WHERE room_id = ? AND month = ?', [room.id, month]
+    );
+    if (!existing) {
+      await run('INSERT INTO room_electricity_bills (room_id, month, amount) VALUES (?, ?, ?)',
+        [room.id, month, room.electricity_bill]);
+    }
+  }
+  await run("INSERT INTO app_meta (key, value) VALUES ('bills_migrated', '1')");
+}
+
 async function init() {
   // Split on semicolons that end statements. Safe here: no procedural SQL bodies.
   const statements = SCHEMA.split(';').map((s) => s.trim()).filter(Boolean);
@@ -242,6 +271,7 @@ async function init() {
   // Add newer columns to databases created before they existed.
   await ensureColumn('rooms', 'address', 'TEXT');
   await ensureColumn('rooms', 'electricity_bill', 'INTEGER NOT NULL DEFAULT 0');
+  await migrateLegacyBills();
   await seedIfEmpty();
 }
 
@@ -272,7 +302,7 @@ async function seedIfEmpty() {
   // A previous seed may have failed partway (e.g. Postgres rejecting a demo DATE).
   // Clear the half-seeded demo data so this run can start clean. Users are kept.
   if (Number(rooms[0].n) > 0 || Number(tenants[0].n) > 0) {
-    for (const table of ['electricity_readings', 'electricity_meters', 'dues', 'payments', 'files', 'tenants', 'expenses', 'rooms']) {
+    for (const table of ['electricity_readings', 'electricity_meters', 'room_electricity_bills', 'dues', 'payments', 'files', 'tenants', 'expenses', 'rooms']) {
       await run(`DELETE FROM ${table}`);
     }
   }

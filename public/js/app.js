@@ -468,7 +468,7 @@ function viewRooms() {
   return `<div class="page-head"><div><h1>Rooms</h1><p>${S.rooms.length} rooms · ${S.rooms.filter((r) => r.tenant).length} occupied · address, rent &amp; electricity in one place</p></div>
     ${canEdit ? '<button class="btn" data-act="add-room">＋ Add room</button>' : ''}</div>
   <div class="card"><div class="table-wrap"><table><thead><tr><th>Room</th><th>Complete address</th><th>Floor</th><th>Tenant</th>
-    <th class="num">Rent</th><th class="num">Electricity bill (₹)</th>
+    <th class="num">Rent</th><th class="num">Electricity · ${mlabel(S.month)} (₹)</th>
     <th class="num">Collected</th><th class="num">Pending</th><th></th></tr></thead><tbody>
   ${S.rooms.map((r) => {
     const e = elecFor(r.id);
@@ -480,7 +480,7 @@ function viewRooms() {
       <td class="num">${money(r.rent)}</td>
       <td class="num">
         ${canEdit
-          ? `<span class="bill-wrap"><span>₹</span><input type="number" class="bill-input" min="0" step="1" value="${esc(r.electricity_bill || 0)}" data-change="room-electricity-bill" data-id="${r.id}" aria-label="Electricity bill for room ${esc(r.room_no)}" title="Type the electricity bill in rupees, then press Tab or Enter"></span>`
+          ? `<span class="bill-wrap"><span>₹</span><input type="number" class="bill-input" min="0" step="1" value="${esc(r.electricity_bill || 0)}" data-change="room-electricity-bill" data-id="${r.id}" data-month="${esc(S.month)}" aria-label="Electricity bill for room ${esc(r.room_no)}, ${mlabel(S.month)}" title="Bill for ${mlabel(S.month)} — press Tab or Enter to save"></span>`
           : money(r.electricity_bill || 0)}
         ${e.current_units !== null && e.current_units !== undefined
           ? `<br><span class="muted small">reading ${fmtN(e.current_units)} units</span>` : ''}
@@ -493,7 +493,7 @@ function viewRooms() {
         <button class="btn danger sm" data-act="del-room" data-id="${r.id}">Delete</button>` : ''}</div></td></tr>`;
   }).join('')}
   </tbody></table></div>
-  <div class="muted small" style="padding:0 16px 14px">Admins can type each flat's electricity bill in rupees directly in the table — it saves automatically on Enter or when you click away. Monthly meter readings are tracked separately on the <b>Electricity</b> page.</div>
+  <div class="muted small" style="padding:0 16px 14px">Each month has its own bill. Admins can type a flat's electricity bill for <b>${mlabel(S.month)}</b> directly in the table — it saves on Enter or when you click away. Change the month above to edit a different month. Meter readings are tracked separately on the <b>Electricity</b> page.</div>
   </div>`;
 }
 
@@ -803,7 +803,7 @@ function openRoomModal(id) {
       <div class="field"><label>Floor</label><input name="floor" value="${esc(r.floor || '')}" placeholder="Ground / First…"></div>
       <div class="field full"><label>Complete address of this room</label><textarea name="address" rows="2" placeholder="House no., street, area, city, PIN — anything needed to find this room">${esc(r.address || '')}</textarea></div>
       <div class="field"><label>Monthly rent (₹) *</label><input type="number" name="rent" min="0" value="${esc(r.rent || '')}" required></div>
-      <div class="field"><label>Electricity bill (₹)</label><input type="number" name="electricity_bill" min="0" value="${esc(r.electricity_bill || 0)}"></div>
+      <div class="field"><label>Electricity bill for ${mlabel(S.month)} (₹)</label><input type="number" name="electricity_bill" min="0" value="${esc(r.electricity_bill || 0)}"></div>
       <div class="field"><label>Notes</label><input name="notes" value="${esc(r.notes || '')}"></div>
     </form>`,
     foot: `<button class="btn ghost" data-act="close-modal">Cancel</button><button class="btn" data-act="submit-form" data-target="room">Save room</button>`,
@@ -1077,7 +1077,7 @@ const FORMS = {
     const id = v(f, 'id');
     await api(id ? `/rooms/${id}` : '/rooms', {
       method: id ? 'PUT' : 'POST',
-      body: { room_no: v(f, 'room_no'), floor: v(f, 'floor'), address: v(f, 'address'), rent: v(f, 'rent'), electricity_bill: v(f, 'electricity_bill'), notes: v(f, 'notes') },
+      body: { room_no: v(f, 'room_no'), floor: v(f, 'floor'), address: v(f, 'address'), rent: v(f, 'rent'), electricity_bill: v(f, 'electricity_bill'), month: S.month, notes: v(f, 'notes') },
     });
     return 'Room saved.';
   },
@@ -1411,9 +1411,11 @@ const CHANGES = {
     const room = S.rooms.find((r) => String(r.id) === el.dataset.id);
     if (!room) return;
     try {
-      await api(`/rooms/${el.dataset.id}`, { method: 'PUT', body: { electricity_bill: amount } });
+      await api(`/rooms/${el.dataset.id}`, {
+        method: 'PUT', body: { electricity_bill: amount, month: el.dataset.month || S.month },
+      });
       room.electricity_bill = amount;
-      toast('Electricity bill saved.');
+      toast(`${mlabel(el.dataset.month || S.month)} bill saved.`);
     } catch (e) {
       el.value = room.electricity_bill || 0;
       toast(e.message, true);
