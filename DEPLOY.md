@@ -76,7 +76,8 @@ Then create the repository on GitHub:
 
    | Key | Value |
    | --- | --- |
-   | `DATABASE_URL` | The Neon connection string from Step 1 |
+   | `NODE_VERSION` | `20` | Optional extra safeguard — `package.json` already pins Node 20 via `engines`, so Render should detect it automatically |
+| `DATABASE_URL` | The Neon connection string from Step 1 |
    | `JWT_SECRET` | A long random string, e.g. `rentflow-2026-xyz-8Hk29QpLm4` — make up your own |
    | `NODE_ENV` | `production` |
    | `COOKIE_SECURE` | `true` |
@@ -182,5 +183,6 @@ If you want the app to open the server directly with no setup screen:
 | Login fails / cookies do not stick | Make sure `COOKIE_SECURE=true` and you are using `https://` (not `http://`). |
 | APK says "Could not reach that server" | Check the URL spelling, confirm the health endpoint works in a browser, and make sure the phone has internet. |
 | WhatsApp link opens `localhost` | Set `PUBLIC_BASE_URL` (Step 5) and redeploy. |
-| Render build fails | Check Render → Logs. Usually a missing env var. Confirm `npm install` and `npm start` are the build/start commands. |
+| Build fails with `better-sqlite3` / `node-gyp` / `GetPrototype` errors | Render picked a Node version too new for `better-sqlite3` (e.g. Node 26). This repo pins Node 20 in `package.json` → `engines.node` and in `.nvmrc`. Commit and push those files, or set `NODE_VERSION=20` in Render → Environment. Node 20 is LTS and has prebuilt `better-sqlite3` binaries, so `npm install` succeeds. |
+| Render build fails for another reason | Check Render → Logs. Usually a missing env var. Confirm `npm install` and `npm start` are the build/start commands. |
 | First load is slow | Normal on the free plan (cold start). Consider a paid instance if you need it always instant. |

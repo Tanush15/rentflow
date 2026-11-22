@@ -16,7 +16,7 @@
     "mobile:build:android": "cap build android"
   },
   "engines": {
-    "node": ">=18"
+    "node": "20.x"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.10",

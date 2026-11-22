@@ -24,7 +24,7 @@ A family rent manager built for one very specific reality: **everyone in the fam
 
 ## Quick start (local, 2 minutes)
 
-Requires Node.js 18+.
+Requires Node.js 20 LTS (pinned in `package.json` → `engines.node` and `.nvmrc`). Newer major versions such as Node 26 can break the native `better-sqlite3` dependency used for local SQLite storage.
 
 ```bash
 npm install
