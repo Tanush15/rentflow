@@ -443,18 +443,33 @@ function viewDashboard() {
 }
 
 function viewRooms() {
-  return `<div class="page-head"><div><h1>Rooms</h1><p>${S.rooms.length} rooms · ${S.rooms.filter((r) => r.tenant).length} occupied</p></div>
+  const elecFor = (id) => (S.electricity?.meters || []).find((m) => String(m.room_id) === String(id)) || {};
+  return `<div class="page-head"><div><h1>Rooms</h1><p>${S.rooms.length} rooms · ${S.rooms.filter((r) => r.tenant).length} occupied · address, rent &amp; electricity in one place</p></div>
     <button class="btn" data-act="add-room">＋ Add room</button></div>
-  <div class="card"><div class="table-wrap"><table><thead><tr><th>Room</th><th>Floor</th><th>Monthly rent</th><th>Tenant</th><th class="num">Collected</th><th class="num">Pending</th><th></th></tr></thead><tbody>
-  ${S.rooms.map((r) => `<tr>
-    <td class="strong">${esc(r.room_no)}</td><td class="muted">${esc(r.floor || '-')}</td><td>${money(r.rent)}</td>
-    <td>${r.tenant ? `<a href="#/tenants/${r.tenant.id}">${esc(r.tenant.name)}</a>` : '<span class="badge info">Vacant</span>'}</td>
-    <td class="num">${r.tenant ? money(r.collected) : '-'}</td>
-    <td class="num" style="color:${r.pending > 0 ? 'var(--red)' : 'inherit'};font-weight:600">${r.tenant ? money(r.pending) : '-'}</td>
-    <td><div class="btn-row">${r.tenant ? `<button class="btn soft sm" data-act="open-payment" data-id="${r.tenant.id}">Collect</button>` : ''}
-      <button class="btn ghost sm" data-act="edit-room" data-id="${r.id}">Edit</button>
-      <button class="btn danger sm" data-act="del-room" data-id="${r.id}">Delete</button></div></td></tr>`).join('')}
-  </tbody></table></div></div>`;
+  <div class="card"><div class="table-wrap"><table><thead><tr><th>Room</th><th>Complete address</th><th>Floor</th><th>Tenant</th>
+    <th class="num">Rent</th><th class="num">Electricity ${esc(String(S.electricity?.month || S.month).slice(5))}</th>
+    <th class="num">Collected</th><th class="num">Pending</th><th></th></tr></thead><tbody>
+  ${S.rooms.map((r) => {
+    const e = elecFor(r.id);
+    return `<tr>
+      <td class="strong">${esc(r.room_no)}</td>
+      <td class="small muted" style="max-width:230px;white-space:normal">${r.address ? esc(r.address) : '<span class="badge">Not set · click Edit</span>'}</td>
+      <td class="muted">${esc(r.floor || '-')}</td>
+      <td>${r.tenant ? `<a href="#/tenants/${r.tenant.id}">${esc(r.tenant.name)}</a>` : '<span class="badge info">Vacant</span>'}</td>
+      <td class="num">${money(r.rent)}</td>
+      <td class="num">${e.current_amount !== null && e.current_amount !== undefined
+        ? `${money(e.current_amount)}<br><span class="muted small">${fmtN(e.current_units)} units</span>`
+        : '<span class="muted">-</span>'}</td>
+      <td class="num">${r.tenant ? money(r.collected) : '-'}</td>
+      <td class="num" style="color:${r.pending > 0 ? 'var(--red)' : 'inherit'};font-weight:600">${r.tenant ? money(r.pending) : '-'}</td>
+      <td><div class="btn-row">${r.tenant ? `<button class="btn soft sm" data-act="open-payment" data-id="${r.tenant.id}">Collect</button>` : ''}
+        ${e.meter_no ? `<button class="btn ghost sm" data-act="elec-history" data-id="${r.id}">Bill history</button>` : ''}
+        <button class="btn ghost sm" data-act="edit-room" data-id="${r.id}">Edit</button>
+        <button class="btn danger sm" data-act="del-room" data-id="${r.id}">Delete</button></div></td></tr>`;
+  }).join('')}
+  </tbody></table></div>
+  <div class="muted small" style="padding:0 16px 14px">Electricity figures are the saved readings for ${mlabel(S.electricity?.month || S.month)}. Manage meters and monthly readings on the <b>Electricity</b> page.</div>
+  </div>`;
 }
 
 function viewTenants() {
@@ -695,6 +710,10 @@ function viewAdmin() {
     <button class="btn amber sm" data-act="toggle-user" data-id="${u.id}" data-active="${u.active ? 0 : 1}">${u.active ? 'Deactivate' : 'Activate'}</button>
     <button class="btn danger sm" data-act="del-user" data-id="${u.id}">Delete</button></div></td></tr>`).join('')}
   </tbody></table></div></div>
+  <div class="card" style="margin-top:16px"><h3>Start with a clean rent book</h3>
+    <p class="muted small">Remove the sample rooms, tenants, payments, dues, expenses and electricity records so you can enter your own family's data. User accounts and passwords are kept. This cannot be undone and the demo data will not return after a restart.</p>
+    <button class="btn danger" data-act="clear-demo-data">Clear all demo data</button>
+  </div>
   <div class="card"><h3>Recent activity</h3><div class="table-wrap"><table><thead><tr><th>Who</th><th>Action</th><th>Details</th><th>When</th></tr></thead><tbody>
   ${S.dash.activity.slice(0, 20).map((a) => `<tr><td>${esc(a.user_name || 'System')}</td><td>${esc(a.action)} · ${esc(a.entity)}</td><td class="muted">${esc(a.details || '-')}</td><td class="muted">${dstr(a.created_at)}</td></tr>`).join('')}
   </tbody></table></div></div>`;
@@ -733,6 +752,7 @@ function openRoomModal(id) {
       <input type="hidden" name="id" value="${esc(r.id || '')}">
       <div class="field"><label>Room number *</label><input name="room_no" value="${esc(r.room_no || '')}" required></div>
       <div class="field"><label>Floor</label><input name="floor" value="${esc(r.floor || '')}" placeholder="Ground / First…"></div>
+      <div class="field full"><label>Complete address of this room</label><textarea name="address" rows="2" placeholder="House no., street, area, city, PIN — anything needed to find this room">${esc(r.address || '')}</textarea></div>
       <div class="field"><label>Monthly rent (₹) *</label><input type="number" name="rent" min="0" value="${esc(r.rent || '')}" required></div>
       <div class="field"><label>Notes</label><input name="notes" value="${esc(r.notes || '')}"></div>
     </form>`,
@@ -1007,7 +1027,7 @@ const FORMS = {
     const id = v(f, 'id');
     await api(id ? `/rooms/${id}` : '/rooms', {
       method: id ? 'PUT' : 'POST',
-      body: { room_no: v(f, 'room_no'), floor: v(f, 'floor'), rent: v(f, 'rent'), notes: v(f, 'notes') },
+      body: { room_no: v(f, 'room_no'), floor: v(f, 'floor'), address: v(f, 'address'), rent: v(f, 'rent'), notes: v(f, 'notes') },
     });
     return 'Room saved.';
   },
@@ -1285,6 +1305,12 @@ const ACTIONS = {
       if (btn) btn.disabled = false;
     }
   },
+  'clear-demo-data': () => confirmAction('Clear demo data',
+    'Permanently delete all rooms, tenants, payments, dues, expenses and electricity records? Family user accounts stay. This cannot be undone.',
+    async () => {
+      await api('/admin/clear-demo-data', { method: 'POST' });
+      await loadData(); renderView(); toast('Demo data cleared. You can now add your own rooms.');
+    }),
   'add-user': () => openUserModal(),
   'edit-user': (el) => openUserModal(el.dataset.id),
   'toggle-user': (el) => confirmAction(el.dataset.active === '0' ? 'Activate user' : 'Deactivate user',

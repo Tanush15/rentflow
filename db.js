@@ -82,9 +82,15 @@ CREATE TABLE IF NOT EXISTS rooms (
   id ${ID},
   room_no TEXT NOT NULL UNIQUE,
   floor TEXT,
+  address TEXT,
   rent INTEGER NOT NULL DEFAULT 0,
   notes TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS app_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tenants (
@@ -210,6 +216,21 @@ CREATE INDEX IF NOT EXISTS idx_elec_readings_meter ON electricity_readings(meter
 CREATE INDEX IF NOT EXISTS idx_activity_created ON activity(created_at);
 `;
 
+async function ensureColumn(table, column, type) {
+  let exists = false;
+  if (usePostgres) {
+    const rows = await query(
+      'SELECT 1 FROM information_schema.columns WHERE table_name = ? AND column_name = ?',
+      [table, column]
+    );
+    exists = rows.length > 0;
+  } else {
+    const rows = await query(`PRAGMA table_info(${table})`);
+    exists = rows.some((c) => c.name === column);
+  }
+  if (!exists) await run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
+
 async function init() {
   // Split on semicolons that end statements. Safe here: no procedural SQL bodies.
   const statements = SCHEMA.split(';').map((s) => s.trim()).filter(Boolean);
@@ -217,6 +238,8 @@ async function init() {
     if (usePostgres) await pool.query(stmt);
     else sqlite.prepare(stmt).run();
   }
+  // Add newer columns to databases created before they existed.
+  await ensureColumn('rooms', 'address', 'TEXT');
   await seedIfEmpty();
 }
 
@@ -236,6 +259,9 @@ async function seedIfEmpty() {
     }
   }
 
+  // Once the family clears the demo data, never re-seed it on a later restart.
+  const cleared = await get("SELECT value FROM app_meta WHERE key = 'demo_cleared'");
+  if (cleared) return;
   if (process.env.SEED_DEMO === 'false') return;
   const rooms = await query('SELECT COUNT(*) AS n FROM rooms');
   const tenants = await query('SELECT COUNT(*) AS n FROM tenants');

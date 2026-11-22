@@ -76,6 +76,7 @@ app.use('/api/expenses', require('./routes/expenses'));
 app.use('/api/electricity', require('./routes/electricity'));
 app.use('/api/reports', require('./routes/reports'));
 app.use('/api/users', require('./routes/users'));
+app.use('/api/admin', require('./routes/admin'));
 app.use('/api/files', require('./routes/files'));
 app.use('/api/share', require('./routes/share'));
 
