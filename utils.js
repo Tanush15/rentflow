@@ -46,6 +46,43 @@ function publicUser(u) {
   };
 }
 
+const CHANGE_LABELS = {
+  room_no: 'Room no', floor: 'Floor', address: 'Address', rent: 'Rent',
+  electricity_bill: 'Electricity bill', notes: 'Notes', name: 'Name', phone: 'Phone',
+  meter_no: 'Meter no', ca_number: 'CA number', provider: 'Provider', rate_per_unit: 'Rate/unit',
+  month: 'Month', reading: 'Reading', previous_reading: 'Previous reading', units: 'Units',
+  amount: 'Amount', bill_date: 'Bill date', due_date: 'Due date', status: 'Status',
+  tenant_id: 'Tenant', mode: 'Mode', reference: 'Reference', rent_amount: 'Rent',
+  extra_charges: 'Extra charges', dues_adjusted: 'Dues adjusted', remaining: 'Pending',
+  receipt_no: 'Receipt', source: 'Source', reason: 'Reason',
+};
+const MONEY_KEYS = new Set([
+  'rent', 'electricity_bill', 'amount', 'rent_amount', 'extra_charges',
+  'dues_adjusted', 'remaining', 'rate_per_unit',
+]);
+
+function changeValue(key, value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (MONEY_KEYS.has(key)) return inr(value);
+  return String(value);
+}
+
+// Build a readable "Field: old → new" summary for the activity log.
+function describeChanges(before, after, keys) {
+  const b = before || {};
+  const a = after || {};
+  const list = keys || Array.from(new Set([...Object.keys(b), ...Object.keys(a)]));
+  const parts = [];
+  for (const key of list) {
+    const oldValue = b[key];
+    const newValue = a[key];
+    if (String(oldValue ?? '') === String(newValue ?? '')) continue;
+    const label = CHANGE_LABELS[key] || key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    parts.push(`${label}: ${changeValue(key, oldValue)} → ${changeValue(key, newValue)}`);
+  }
+  return parts.join(' · ');
+}
+
 async function logActivity(req, action, entity, entityId, details) {
   try {
     await db.run(
@@ -137,6 +174,7 @@ module.exports = {
   asyncHandler,
   publicUser,
   logActivity,
+  describeChanges,
   notify,
   nextReceiptNo,
   normalizePhone,

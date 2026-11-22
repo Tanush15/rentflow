@@ -79,7 +79,7 @@ const S = {
   month: thisMonth(),
   paymentsAll: false,
   duesTab: 'pending',
-  rooms: [], tenants: [], payments: [], dues: [], settledDues: [], expenses: [], users: [],
+  rooms: [], tenants: [], payments: [], dues: [], settledDues: [], expenses: [], users: [], activity: [],
   electricity: null,
   dash: null, reports: null, detail: null,
   socket: null, reloadTimer: null, receiptId: null, voiceOpen: false,
@@ -104,6 +104,24 @@ async function api(path, opts = {}) {
   const data = ct.includes('json') ? await res.json() : await res.text();
   if (!res.ok) throw new Error((data && data.error) || 'Something went wrong.');
   return data;
+}
+
+async function downloadPdf(path, filename) {
+  try {
+    const res = await fetch(`/api${path}`, { credentials: 'same-origin' });
+    if (!res.ok) {
+      const info = await res.json().catch(() => ({}));
+      throw new Error(info.error || 'Export failed.');
+    }
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast('PDF downloaded.');
+  } catch (e) {
+    toast(e.message, true);
+  }
 }
 
 /* ---------------- Toast / modal ---------------- */
@@ -281,6 +299,7 @@ const NAV = [
   { view: 'expenses', ico: '🧾', label: 'Expenses', title: 'Expenses', sub: 'Track every outflow' },
   { view: 'electricity', ico: '⚡', label: 'Electricity', title: 'Electricity', sub: 'Meter numbers, units, bills &amp; reading history' },
   { view: 'reports', ico: '📈', label: 'Reports', title: 'Reports', sub: 'Collections, dues &amp; yearly summaries' },
+  { view: 'activity', ico: '📜', label: 'Activity', title: 'Family activity', sub: 'Every change, with the exact values' },
   { view: 'admin', ico: '⚙️', label: 'Admin', title: 'Family access', sub: 'Manage who can use RentFlow', adminOnly: true },
   { view: 'account', ico: '🔐', label: 'Account', title: 'My account', sub: 'Change your password' },
 ];
@@ -331,13 +350,14 @@ async function loadData() {
     api(`/rooms?month=${S.month}`), api('/tenants'), api('/payments'), api('/dues'),
     api('/dues?settled=1'), api('/expenses'),
     api(`/reports/dashboard?month=${S.month}`), api(`/reports/summary?month=${S.month}`),
-    api(`/electricity?month=${S.month}`),
+    api(`/electricity?month=${S.month}`), api('/reports/activity'),
   ];
   if (S.me && S.me.role === 'super_admin') calls.push(api('/users'));
-  const [rooms, tenants, payments, dues, settled, expenses, dash, reports, electricity, users] = await Promise.all(calls);
+  const [rooms, tenants, payments, dues, settled, expenses, dash, reports, electricity, activity, users] = await Promise.all(calls);
   S.rooms = rooms.rooms; S.tenants = tenants.tenants; S.payments = payments.payments;
   S.dues = dues.dues; S.settledDues = settled.dues; S.expenses = expenses.expenses;
   S.dash = dash; S.reports = reports; S.electricity = electricity;
+  S.activity = activity.activity || [];
   S.users = users ? users.users : [];
 }
 
@@ -372,7 +392,7 @@ async function renderView() {
     dashboard: viewDashboard, rooms: viewRooms, tenants: viewTenants, tenant: viewTenantDetail,
     payments: viewPayments, dues: viewDues, expenses: viewExpenses,
     electricity: viewElectricity,
-    reports: viewReports, admin: viewAdmin, account: viewAccount,
+    reports: viewReports, activity: viewActivity, admin: viewAdmin, account: viewAccount,
   };
   const fn = views[S.view] || viewDashboard;
   content.innerHTML = await fn();
@@ -560,6 +580,7 @@ function viewPayments() {
   const total = list.reduce((s, p) => s + Number(p.amount || 0), 0);
   return `<div class="page-head"><div><h1>Rent payments</h1><p>${list.length} payment(s) · ${money(total)} total</p></div>
     <div class="btn-row"><button class="btn ghost" data-act="toggle-all-payments">${S.paymentsAll ? 'Show selected month' : 'Show all months'}</button>
+    <button class="btn ghost" data-act="export-payments">⬇ Export PDF</button>
     <button class="btn" data-act="open-payment">＋ Record payment</button></div></div>
   <div class="card"><h3>Room-aware collection <small>Partial payments keep the balance visible as a due</small></h3>
     <div class="table-wrap"><table><thead><tr><th>Receipt</th><th>Tenant</th><th>Room</th><th>Month</th><th>Mode</th><th class="num">Rent</th><th class="num">Extra</th><th class="num">Due adj.</th><th class="num">Received</th><th class="num">Pending</th><th></th></tr></thead><tbody>
@@ -697,10 +718,30 @@ function viewReports() {
     </div>
   </div>
   <div class="card" style="margin-top:16px"><h3>Pending dues detail</h3>
-    ${r.pending.length ? `<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th class="num">Rent</th><th class="num">Paid</th><th class="num">Old dues</th><th class="num">Pending</th></tr></thead><tbody>
-    ${r.pending.map((p) => `<tr><td class="strong">${esc(p.name)}</td><td>${esc(p.room_no)}</td><td class="num">${money(p.rent)}</td><td class="num">${money(p.paid)}</td>
+    ${r.pending.length ? `<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th class="num">Rent</th><th class="num">Electricity</th><th class="num">Paid</th><th class="num">Old dues</th><th class="num">Pending</th></tr></thead><tbody>
+    ${r.pending.map((p) => `<tr><td class="strong">${esc(p.name)}</td><td>${esc(p.room_no)}</td><td class="num">${money(p.rent)}</td><td class="num">${money(p.electricity_bill)}</td><td class="num">${money(p.paid)}</td>
     <td class="num">${money(p.dues)}</td><td class="num strong" style="color:var(--red)">${money(p.pending)}</td></tr>`).join('')}
     </tbody></table></div>` : '<div class="empty">No pending dues. 🎉</div>'}
+  </div>`;
+}
+
+function viewActivity() {
+  const rows = S.activity;
+  const groups = { rooms: 'Rooms', payments: 'Payments', electricity: 'Electricity' };
+  return `<div class="page-head"><div><h1>Family activity</h1><p>${rows.length} recent change(s) · old and new values are recorded</p></div>
+    <button class="btn ghost" data-act="export-activity">⬇ Export PDF</button></div>
+  <div class="card">
+    <div class="muted small" style="padding:12px 16px 0">Changes in <b>${Object.values(groups).join(', ')}</b> include the exact fields that were edited — for example <i>Electricity bill: ₹0 → ₹1,200</i>.</div>
+    ${rows.length ? `<div class="table-wrap"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Area</th><th>Record</th><th>What changed</th></tr></thead><tbody>
+    ${rows.map((a) => `<tr>
+      <td class="muted small">${dstr(a.created_at)}</td>
+      <td class="strong">${esc(a.user_name || 'System')}</td>
+      <td>${esc(a.action)}</td>
+      <td><span class="badge info">${esc(groups[a.entity] || a.entity || '-')}</span></td>
+      <td class="muted">${a.entity_id ? `#${esc(a.entity_id)}` : '-'}</td>
+      <td class="small" style="max-width:520px;white-space:normal">${esc(a.details || '-')}</td>
+    </tr>`).join('')}
+    </tbody></table></div>` : '<div class="empty">No activity yet.</div>'}
   </div>`;
 }
 
@@ -719,7 +760,10 @@ function viewAdmin() {
     <p class="muted small">Remove the sample rooms, tenants, payments, dues, expenses and electricity records so you can enter your own family's data. User accounts and passwords are kept. This cannot be undone and the demo data will not return after a restart.</p>
     <button class="btn danger" data-act="clear-demo-data">Clear all demo data</button>
   </div>
-  <div class="card"><h3>Recent activity</h3><div class="table-wrap"><table><thead><tr><th>Who</th><th>Action</th><th>Details</th><th>When</th></tr></thead><tbody>
+  <div class="card"><div class="page-head" style="margin:0 0 10px"><h3 style="margin:0">Recent activity</h3>
+    <div class="btn-row"><button class="btn ghost sm" data-act="nav" data-view="activity">View all</button>
+    <button class="btn ghost sm" data-act="export-activity">⬇ Export PDF</button></div></div>
+    <div class="table-wrap"><table><thead><tr><th>Who</th><th>Action</th><th>Details</th><th>When</th></tr></thead><tbody>
   ${S.dash.activity.slice(0, 20).map((a) => `<tr><td>${esc(a.user_name || 'System')}</td><td>${esc(a.action)} · ${esc(a.entity)}</td><td class="muted">${esc(a.details || '-')}</td><td class="muted">${dstr(a.created_at)}</td></tr>`).join('')}
   </tbody></table></div></div>`;
 }
@@ -1317,6 +1361,10 @@ const ACTIONS = {
       await api('/admin/clear-demo-data', { method: 'POST' });
       await loadData(); renderView(); toast('Demo data cleared. You can now add your own rooms.');
     }),
+  'export-activity': () => downloadPdf('/reports/activity/pdf',
+    `rentflow-activity-${new Date().toISOString().slice(0, 10)}.pdf`),
+  'export-payments': () => downloadPdf(`/payments/export/pdf?all=${S.paymentsAll ? 1 : 0}&month=${S.month}`,
+    `rentflow-payments-${S.month}.pdf`),
   'add-user': () => openUserModal(),
   'edit-user': (el) => openUserModal(el.dataset.id),
   'toggle-user': (el) => confirmAction(el.dataset.active === '0' ? 'Activate user' : 'Deactivate user',

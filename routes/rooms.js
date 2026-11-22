@@ -4,7 +4,9 @@ const express = require('express');
 const db = require('../db');
 const auth = require('../auth');
 const data = require('../lib/data');
-const { asyncHandler, logActivity, notify, num, currentMonth } = require('../utils');
+const { asyncHandler, logActivity, notify, num, currentMonth, describeChanges } = require('../utils');
+
+const ROOM_FIELDS = ['room_no', 'floor', 'address', 'rent', 'electricity_bill', 'notes'];
 
 const router = express.Router();
 router.use(auth.authRequired);
@@ -18,11 +20,15 @@ router.post('/', auth.requireRole('admin', 'super_admin'), asyncHandler(async (r
   if (!room_no || !String(room_no).trim()) return res.status(400).json({ error: 'Room number is required.' });
   const exists = await db.get('SELECT id FROM rooms WHERE room_no = ?', [String(room_no).trim()]);
   if (exists) return res.status(400).json({ error: 'A room with that number already exists.' });
+  const created = {
+    room_no: String(room_no).trim(), floor: floor || null, address: address || null,
+    rent: num(rent), electricity_bill: num(electricity_bill), notes: notes || null,
+  };
   const result = await db.run(
     'INSERT INTO rooms (room_no, floor, address, rent, electricity_bill, notes) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
-    [String(room_no).trim(), floor || null, address || null, num(rent), num(electricity_bill), notes || null]
+    [created.room_no, created.floor, created.address, created.rent, created.electricity_bill, created.notes]
   );
-  await logActivity(req, 'created', 'room', result.lastId, `Room ${room_no}`);
+  await logActivity(req, 'created', 'room', result.lastId, describeChanges({}, created, ROOM_FIELDS));
   notify(req, 'rooms', 'created');
   res.status(201).json({ id: result.lastId, rooms: await data.listRooms() });
 }));
@@ -32,15 +38,21 @@ router.put('/:id', auth.requireRole('admin', 'super_admin'), asyncHandler(async 
   const room = await db.get('SELECT * FROM rooms WHERE id = ?', [id]);
   if (!room) return res.status(404).json({ error: 'Room not found.' });
   const { room_no, floor, address, rent, electricity_bill, notes } = req.body || {};
+  const updated = {
+    room_no: room_no || room.room_no,
+    floor: floor ?? room.floor,
+    address: address ?? room.address,
+    rent: rent !== undefined ? num(rent) : room.rent,
+    electricity_bill: electricity_bill !== undefined ? num(electricity_bill) : room.electricity_bill,
+    notes: notes ?? room.notes,
+  };
   await db.run(
     `UPDATE rooms SET room_no = ?, floor = ?, address = ?, rent = ?, electricity_bill = ?, notes = ?
      WHERE id = ? RETURNING id`,
-    [room_no || room.room_no, floor ?? room.floor, address ?? room.address,
-      rent !== undefined ? num(rent) : room.rent,
-      electricity_bill !== undefined ? num(electricity_bill) : room.electricity_bill,
-      notes ?? room.notes, id]
+    [updated.room_no, updated.floor, updated.address, updated.rent, updated.electricity_bill, updated.notes, id]
   );
-  await logActivity(req, 'updated', 'room', id, `Room ${room_no || room.room_no}`);
+  await logActivity(req, 'updated', 'room', id,
+    describeChanges(room, updated, ROOM_FIELDS) || `Room ${updated.room_no} · no values changed`);
   notify(req, 'rooms', 'updated');
   res.json({ rooms: await data.listRooms() });
 }));
@@ -51,7 +63,7 @@ router.delete('/:id', auth.requireRole('admin', 'super_admin'), asyncHandler(asy
   const active = await db.get('SELECT id FROM tenants WHERE room_id = ? AND active = 1', [room.id]);
   if (active) return res.status(400).json({ error: 'Vacate the tenant in this room before deleting it.' });
   await db.run('DELETE FROM rooms WHERE id = ? RETURNING id', [room.id]);
-  await logActivity(req, 'deleted', 'room', room.id, `Room ${room.room_no}`);
+  await logActivity(req, 'deleted', 'room', room.id, describeChanges(room, {}, ROOM_FIELDS));
   notify(req, 'rooms', 'deleted');
   res.json({ ok: true });
 }));

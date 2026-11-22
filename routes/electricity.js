@@ -3,7 +3,10 @@
 const express = require('express');
 const db = require('../db');
 const auth = require('../auth');
-const { asyncHandler, logActivity, notify, num } = require('../utils');
+const { asyncHandler, logActivity, notify, num, describeChanges } = require('../utils');
+
+const METER_FIELDS = ['meter_no', 'ca_number', 'provider', 'rate_per_unit', 'notes'];
+const READING_FIELDS = ['month', 'reading', 'previous_reading', 'units', 'amount', 'bill_date', 'due_date', 'status', 'source'];
 
 const router = express.Router();
 router.use(auth.authRequired);
@@ -106,10 +109,11 @@ router.put('/meters/:roomId', write, asyncHandler(async (req, res) => {
   const { meter_no, ca_number, provider, rate_per_unit, notes } = req.body || {};
   if (!meter_no || !String(meter_no).trim()) return res.status(400).json({ error: 'Meter number is required.' });
   const existing = await findMeter(room.id);
-  const values = [
-    String(meter_no).trim(), ca_number ? String(ca_number).trim() : null,
-    provider || 'BSES Rajdhani', num(rate_per_unit), notes || null,
-  ];
+  const after = {
+    meter_no: String(meter_no).trim(), ca_number: ca_number ? String(ca_number).trim() : null,
+    provider: provider || 'BSES Rajdhani', rate_per_unit: num(rate_per_unit), notes: notes || null,
+  };
+  const values = [after.meter_no, after.ca_number, after.provider, after.rate_per_unit, after.notes];
   if (existing) {
     await db.run(`UPDATE electricity_meters SET meter_no=?, ca_number=?, provider=?, rate_per_unit=?, notes=?
       WHERE id=? RETURNING id`, [...values, existing.id]);
@@ -117,16 +121,17 @@ router.put('/meters/:roomId', write, asyncHandler(async (req, res) => {
     await db.run(`INSERT INTO electricity_meters (room_id, meter_no, ca_number, provider, rate_per_unit, notes)
       VALUES (?, ?, ?, ?, ?, ?) RETURNING id`, [room.id, ...values]);
   }
-  await logActivity(req, 'updated', 'electricity', room.id, `Meter ${meter_no} · Room ${room.room_no}`);
+  await logActivity(req, 'updated', 'electricity', room.id,
+    `Room ${room.room_no} · ${describeChanges(existing || {}, after, METER_FIELDS)}`);
   notify(req, 'electricity', 'updated');
   res.json({ ok: true });
 }));
 
 router.delete('/meters/:id', write, asyncHandler(async (req, res) => {
-  const meter = await db.get('SELECT id FROM electricity_meters WHERE id = ?', [req.params.id]);
+  const meter = await db.get('SELECT * FROM electricity_meters WHERE id = ?', [req.params.id]);
   if (!meter) return res.status(404).json({ error: 'Meter not found.' });
   await db.run('DELETE FROM electricity_meters WHERE id = ? RETURNING id', [meter.id]);
-  await logActivity(req, 'deleted', 'electricity', meter.id, 'Meter removed');
+  await logActivity(req, 'deleted', 'electricity', meter.id, describeChanges(meter, {}, METER_FIELDS));
   notify(req, 'electricity', 'deleted');
   res.json({ ok: true });
 }));
@@ -152,8 +157,11 @@ router.post('/readings', write, asyncHandler(async (req, res) => {
     'SELECT reading FROM electricity_readings WHERE meter_id = ? AND month < ? ORDER BY month DESC LIMIT 1',
     [meter.id, input.month]
   );
+  const month = String(input.month || '').slice(0, 7);
+  const before = await db.get('SELECT * FROM electricity_readings WHERE meter_id = ? AND month = ?', [meter.id, month]);
   await saveReading(meter, { ...input, previous_reading: previous ? previous.reading : null, source: 'manual' });
-  await logActivity(req, 'recorded', 'electricity', meter.id, `${input.month} · reading ${input.reading}`);
+  const after = await db.get('SELECT * FROM electricity_readings WHERE meter_id = ? AND month = ?', [meter.id, month]);
+  await logActivity(req, 'recorded', 'electricity', meter.id, describeChanges(before || {}, after || {}, READING_FIELDS));
   notify(req, 'electricity', 'reading-added');
   res.json({ ok: true });
 }));
@@ -173,18 +181,21 @@ router.post('/readings/import', write, asyncHandler(async (req, res) => {
     await saveReading(meter, { ...row, previous_reading: previous ? previous.reading : null, source: 'online' });
     saved += 1;
   }
-  await logActivity(req, 'imported', 'electricity', meter.id, `${saved} online reading(s)`);
+  const imported = rows.filter((row) => validMonth(row.month) && Number.isFinite(Number(row.reading)))
+    .slice(0, 20).map((row) => `${row.month}: reading ${num(row.reading)}`).join(' · ');
+  await logActivity(req, 'imported', 'electricity', meter.id,
+    `${saved} online reading(s)${imported ? ` · ${imported}` : ''}`);
   notify(req, 'electricity', 'imported');
   res.json({ ok: true, saved });
 }));
 
 router.delete('/readings/:id', write, asyncHandler(async (req, res) => {
-  const row = await db.get(`SELECT er.id, er.meter_id FROM electricity_readings er
+  const row = await db.get(`SELECT er.* FROM electricity_readings er
     WHERE er.id = ?`, [req.params.id]);
   if (!row) return res.status(404).json({ error: 'Reading not found.' });
   await db.run('DELETE FROM electricity_readings WHERE id = ? RETURNING id', [row.id]);
   await recalcMeter(row.meter_id);
-  await logActivity(req, 'deleted', 'electricity', row.meter_id, 'Reading removed');
+  await logActivity(req, 'deleted', 'electricity', row.meter_id, describeChanges(row, {}, READING_FIELDS));
   notify(req, 'electricity', 'reading-deleted');
   res.json({ ok: true });
 }));

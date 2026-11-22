@@ -4,9 +4,10 @@ const express = require('express');
 const db = require('../db');
 const auth = require('../auth');
 const data = require('../lib/data');
-const { receiptPdf } = require('../lib/pdf');
+const { receiptPdf, paymentsPdf } = require('../lib/pdf');
 const {
   asyncHandler, logActivity, notify, num, currentMonth, nextReceiptNo, receiptText, inr, monthLabel,
+  describeChanges,
 } = require('../utils');
 
 const router = express.Router();
@@ -33,6 +34,20 @@ router.get('/', asyncHandler(async (req, res) => {
     from: req.query.from,
     to: req.query.to,
   }) });
+}));
+
+router.get('/export/pdf', asyncHandler(async (req, res) => {
+  const payments = await data.listPayments({
+    month: req.query.all === '1' ? undefined : (req.query.month || undefined),
+    tenantId: req.query.tenantId,
+    from: req.query.from,
+    to: req.query.to,
+  });
+  const pdf = await paymentsPdf(payments);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition',
+    `attachment; filename="rentflow-payments-${new Date().toISOString().slice(0, 10)}.pdf"`);
+  res.send(pdf);
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
@@ -106,7 +121,20 @@ router.post('/', auth.requireRole('admin', 'super_admin'), asyncHandler(async (r
   const remaining = outstanding.reduce((s, d) => s + num(d.amount), 0);
   await db.run('UPDATE payments SET dues_adjusted = ?, remaining = ? WHERE id = ? RETURNING id', [duesAdjusted, remaining, paymentId]);
 
-  await logActivity(req, 'recorded', 'payment', paymentId, `${tenant.name} ${inr(amount)} ${monthLabel(month)}`);
+  await logActivity(req, 'recorded', 'payment', paymentId, describeChanges({}, {
+    receipt_no: receiptNo,
+    tenant_id: tenant.name,
+    room_no: tenant.room_no,
+    month: monthLabel(month),
+    rent_amount: rent,
+    extra_charges: extra,
+    dues_adjusted: duesAdjusted,
+    remaining,
+    amount,
+    mode: b.mode || 'cash',
+    reference: b.reference,
+    note: b.note,
+  }));
   notify(req, 'payments', 'created', { tenantId: tenant.id });
   const payment = await db.get('SELECT * FROM payments WHERE id = ?', [paymentId]);
   res.status(201).json({ payment, oldTotal, payable });
@@ -118,7 +146,18 @@ router.delete('/:id', auth.requireRole('super_admin'), asyncHandler(async (req, 
   await db.run('DELETE FROM dues WHERE source_payment_id = ? RETURNING id', [payment.id]);
   await db.run('UPDATE dues SET settled = 0, settled_payment_id = NULL WHERE settled_payment_id = ? RETURNING id', [payment.id]);
   await db.run('DELETE FROM payments WHERE id = ? RETURNING id', [payment.id]);
-  await logActivity(req, 'deleted', 'payment', payment.id, payment.receipt_no);
+  const ctx = await paymentContext(payment);
+  await logActivity(req, 'deleted', 'payment', payment.id, describeChanges({
+    receipt_no: payment.receipt_no,
+    tenant_id: ctx.tenantName,
+    room_no: ctx.roomNo,
+    month: monthLabel(payment.month),
+    rent_amount: payment.rent_amount,
+    extra_charges: payment.extra_charges,
+    dues_adjusted: payment.dues_adjusted,
+    amount: payment.amount,
+    mode: payment.mode,
+  }, {}));
   notify(req, 'payments', 'deleted');
   res.json({ ok: true });
 }));
