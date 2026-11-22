@@ -5,9 +5,17 @@ const multer = require('multer');
 const db = require('../db');
 const auth = require('../auth');
 const data = require('../lib/data');
-const { asyncHandler, logActivity, notify, currentMonth } = require('../utils');
+const { asyncHandler, logActivity, notify } = require('../utils');
 
 const router = express.Router();
+
+// DATE columns need YYYY-MM-DD on Postgres (SQLite is lenient, Postgres is not).
+function dateValue(value) {
+  const s = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  if (/^\d{4}-\d{2}$/.test(s)) return `${s}-01`;
+  return new Date().toISOString().slice(0, 10);
+}
 router.use(auth.authRequired);
 
 const upload = multer({
@@ -72,7 +80,7 @@ router.post('/', auth.requireRole('admin', 'super_admin'), asyncHandler(async (r
   const result = await db.run(
     `INSERT INTO tenants (room_id, name, phone, email, join_date, notes, active)
      VALUES (?, ?, ?, ?, ?, ?, 1) RETURNING id`,
-    [room_id || null, String(name).trim(), phone || null, email || null, join_date || currentMonth(), notes || null]
+    [room_id || null, String(name).trim(), phone || null, email || null, dateValue(join_date), notes || null]
   );
   await logActivity(req, 'created', 'tenant', result.lastId, name);
   notify(req, 'tenants', 'created');
@@ -95,7 +103,7 @@ router.put('/:id', auth.requireRole('admin', 'super_admin'), asyncHandler(async 
       b.name || tenant.name,
       b.phone !== undefined ? b.phone || null : tenant.phone,
       b.email !== undefined ? b.email || null : tenant.email,
-      b.join_date !== undefined ? b.join_date || null : tenant.join_date,
+      b.join_date !== undefined ? (b.join_date ? dateValue(b.join_date) : null) : tenant.join_date,
       b.notes !== undefined ? b.notes || null : tenant.notes,
       tenant.id,
     ]

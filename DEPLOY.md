@@ -179,6 +179,7 @@ If you want the app to open the server directly with no setup screen:
 
 | Symptom | Fix |
 | --- | --- |
+| Start fails with `invalid input syntax for type date: "2026-03"` | A `YYYY-MM` month string was written to a `DATE` column. Fixed in the current code: demo seed uses full `YYYY-MM-DD` dates and tenant create/update normalises dates. Pull the latest code and redeploy. The seed also clears a half-finished demo set automatically after a failed first start. |
 | `/api/health` says `db: sqlite` | `DATABASE_URL` is missing or has a typo. Check Render → Environment, then redeploy. |
 | Login fails / cookies do not stick | Make sure `COOKIE_SECURE=true` and you are using `https://` (not `http://`). |
 | APK says "Could not reach that server" | Check the URL spelling, confirm the health endpoint works in a browser, and make sure the phone has internet. |

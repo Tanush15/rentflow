@@ -238,7 +238,16 @@ async function seedIfEmpty() {
 
   if (process.env.SEED_DEMO === 'false') return;
   const rooms = await query('SELECT COUNT(*) AS n FROM rooms');
-  if (Number(rooms[0].n) > 0) return;
+  const tenants = await query('SELECT COUNT(*) AS n FROM tenants');
+  if (Number(rooms[0].n) > 0 && Number(tenants[0].n) > 0) return;
+
+  // A previous seed may have failed partway (e.g. Postgres rejecting a demo DATE).
+  // Clear the half-seeded demo data so this run can start clean. Users are kept.
+  if (Number(rooms[0].n) > 0 || Number(tenants[0].n) > 0) {
+    for (const table of ['electricity_readings', 'electricity_meters', 'dues', 'payments', 'files', 'tenants', 'expenses', 'rooms']) {
+      await run(`DELETE FROM ${table}`);
+    }
+  }
 
   const roomData = [
     ['101', 'Ground', 8500, 'Main road side'],
@@ -262,19 +271,21 @@ async function seedIfEmpty() {
     const d = new Date(now.getFullYear(), now.getMonth() + offset, 1);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   };
+  // ym() returns YYYY-MM for text "month" columns. DATE columns need a full YYYY-MM-DD.
+  const ds = (offset = 0) => `${ym(offset)}-01`;
   const u = await get('SELECT id FROM users WHERE username = ?', ['admin']);
 
   const t1 = await run(
     'INSERT INTO tenants (room_id, name, phone, join_date, notes, active) VALUES (?, ?, ?, ?, ?, 1) RETURNING id',
-    [roomIds[0], 'Rahul Sharma', '9876543210', ym(-8), 'Pays by 5th every month']
+    [roomIds[0], 'Rahul Sharma', '9876543210', ds(-8), 'Pays by 5th every month']
   );
   const t2 = await run(
     'INSERT INTO tenants (room_id, name, phone, join_date, notes, active) VALUES (?, ?, ?, ?, ?, 1) RETURNING id',
-    [roomIds[1], 'Priya Verma', '9123456780', ym(-5), '']
+    [roomIds[1], 'Priya Verma', '9123456780', ds(-5), '']
   );
   const t3 = await run(
     'INSERT INTO tenants (room_id, name, phone, join_date, notes, active) VALUES (?, ?, ?, ?, ?, 1) RETURNING id',
-    [roomIds[2], 'Amit Kumar', '9988776655', ym(-3), '']
+    [roomIds[2], 'Amit Kumar', '9988776655', ds(-3), '']
   );
 
   async function addPayment(tenantId, roomId, month, amount, rent, extra, remaining, mode) {
