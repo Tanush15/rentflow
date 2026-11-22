@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: rentflow
+    env: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: PGSSL
+        value: "true"
+      - key: SEED_DEMO
+        value: "true"
+      # Create a free Neon/Supabase Postgres database and paste its URL here:
+      - key: DATABASE_URL
+        sync: false
+      # Set to your Render service URL after the first deploy:
+      - key: PUBLIC_BASE_URL
+        sync: false
+      # Optional: provider endpoint for online BSES meter lookup
+      - key: ELECTRICITY_API_URL
+        sync: false
+      - key: ELECTRICITY_API_KEY
+        sync: false
