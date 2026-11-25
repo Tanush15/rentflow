@@ -84,6 +84,7 @@ const S = {
   dash: null, reports: null, detail: null,
   socket: null, reloadTimer: null, receiptId: null, voiceOpen: false,
 };
+let deferredInstallPrompt = null;
 
 /* ---------------- API ---------------- */
 async function api(path, opts = {}) {
@@ -106,7 +107,7 @@ async function api(path, opts = {}) {
   return data;
 }
 
-async function downloadPdf(path, filename) {
+async function downloadFile(path, filename, okMessage = 'Downloaded.') {
   try {
     const res = await fetch(`/api${path}`, { credentials: 'same-origin' });
     if (!res.ok) {
@@ -118,16 +119,20 @@ async function downloadPdf(path, filename) {
     a.href = url; a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    toast('PDF downloaded.');
+    toast(okMessage);
   } catch (e) {
     toast(e.message, true);
   }
+}
+function downloadPdf(path, filename) {
+  return downloadFile(path, filename, 'PDF downloaded.');
 }
 
 /* ---------------- Toast / modal ---------------- */
 function toast(message, isError = false) {
   const el = document.createElement('div');
   el.className = `toast${isError ? ' err' : ''}`;
+  el.setAttribute('role', 'status');
   el.textContent = message;
   $('#toast-root').appendChild(el);
   setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; setTimeout(() => el.remove(), 300); }, 3200);
@@ -135,11 +140,15 @@ function toast(message, isError = false) {
 
 function openModal({ title, body, foot = '', wide = false }) {
   $('#modal-root').innerHTML = `<div class="modal-backdrop" data-act="modal-backdrop">
-    <div class="modal${wide ? ' wide' : ''}">
+    <div class="modal${wide ? ' wide' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
       <div class="modal-head"><h3>${esc(title)}</h3><button class="x" data-act="close-modal" aria-label="Close">×</button></div>
       <div class="modal-body">${body}</div>
       ${foot ? `<div class="modal-foot">${foot}</div>` : ''}
     </div></div>`;
+  if (!IS_NATIVE) {
+    const first = $('#modal-root input:not([type=hidden]), #modal-root select, #modal-root textarea');
+    if (first) setTimeout(() => first.focus(), 40);
+  }
 }
 function closeModal() { $('#modal-root').innerHTML = ''; }
 
@@ -154,6 +163,86 @@ function confirmAction(title, message, onYes, label = 'Delete') {
     closeModal();
     try { await onYes(); } catch (e) { toast(e.message, true); }
   };
+}
+
+/* ---------------- Search / table filters ---------------- */
+function filterBox(target, placeholder) {
+  return `<div class="table-tools"><input class="input search" data-filter="${target}" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" autocomplete="off"></div>`;
+}
+
+function searchResultsHtml(query) {
+  const q = String(query || '').trim().toLowerCase();
+  const me = S.me || { role: 'member' };
+  const pages = NAV
+    .filter((n) => !n.adminOnly || me.role === 'super_admin')
+    .filter((n) => !q || n.label.toLowerCase().includes(q) || n.title.toLowerCase().includes(q))
+    .slice(0, q ? 4 : 10);
+  const tenants = q ? S.tenants.filter((t) => [t.name, t.phone, t.room_no, t.email]
+    .some((v) => String(v || '').toLowerCase().includes(q))).slice(0, 6) : [];
+  const rooms = q ? S.rooms.filter((r) => [r.room_no, r.floor, r.address, r.tenant?.name]
+    .some((v) => String(v || '').toLowerCase().includes(q))).slice(0, 6) : [];
+  const payments = q ? S.payments.filter((p) => [p.receipt_no, p.tenant_name, p.room_no, p.month]
+    .some((v) => String(v || '').toLowerCase().includes(q))).slice(0, 5) : [];
+
+  const group = (title, items) => (items.length ? `<div class="search-group"><div class="search-group-title">${title}</div>${items.join('')}</div>` : '');
+  const pageItems = pages.map((n) => `<button class="search-item" data-act="nav" data-view="${n.view}">
+    <span class="search-ico">${n.ico}</span><span><b>${n.label}</b><small>${n.title}</small></span></button>`);
+  const tenantItems = tenants.map((t) => `<button class="search-item" data-act="view-tenant" data-id="${t.id}">
+    <span class="search-ico">👤</span><span><b>${esc(t.name)}</b><small>Room ${esc(t.room_no || '-')} · ${esc(t.phone || 'No phone')}</small></span>
+    ${t.due_total ? `<span class="badge warn">${money(t.due_total)}</span>` : '<span class="badge ok">Clear</span>'}</button>`);
+  const roomItems = rooms.map((r) => `<button class="search-item" data-act="search-room" data-tenant="${r.tenant ? r.tenant.id : ''}">
+    <span class="search-ico">🏠</span><span><b>Room ${esc(r.room_no)}</b><small>${esc(r.tenant ? r.tenant.name : 'Vacant')} · ${esc(r.floor || 'No floor')} · ${esc(r.address || 'No address')}</small></span></button>`);
+  const paymentItems = payments.map((p) => `<button class="search-item" data-act="receipt" data-id="${p.id}">
+    <span class="search-ico">🧾</span><span><b>${esc(p.tenant_name || 'Payment')} · ${money(p.amount)}</b><small>${esc(p.receipt_no || '-')} · ${mlabel(p.month)} · Room ${esc(p.room_no || '-')}</small></span></button>`);
+
+  const html = [
+    group('Go to', pageItems),
+    group('Tenants', tenantItems),
+    group('Rooms', roomItems),
+    group('Payments', paymentItems),
+  ].join('');
+  if (q && !html) return `<div class="empty"><span class="big">🔍</span>Nothing found for “${esc(query)}”.</div>`;
+  return html + `<div class="search-hint">Tip: press <kbd>Ctrl</kbd> + <kbd>K</kbd> anywhere to search. <kbd>Esc</kbd> closes this box.</div>`;
+}
+
+function openSearch() {
+  if (!S.me) return;
+  openModal({
+    title: 'Search RentFlow',
+    wide: true,
+    body: `<div class="search-box"><span aria-hidden="true">🔍</span>
+      <input id="global-search" class="input" placeholder="Search rooms, tenants, receipts, pages…" autocomplete="off" aria-label="Search RentFlow">
+      </div><div id="search-results">${searchResultsHtml('')}</div>`,
+  });
+  const input = $('#global-search');
+  if (!input) return;
+  input.addEventListener('input', () => { $('#search-results').innerHTML = searchResultsHtml(input.value); });
+  setTimeout(() => input.focus(), 40);
+}
+
+// Hide table rows that do not match the search box, without re-rendering.
+function applyTableFilter(input) {
+  const table = $(input.dataset.filter);
+  if (!table) return;
+  const q = input.value.trim().toLowerCase();
+  const tbody = $('tbody', table);
+  if (!tbody) return;
+  const old = $('.filter-empty', tbody);
+  if (old) old.remove();
+  let shown = 0;
+  $$('tr', tbody).forEach((tr) => {
+    if (tr.classList.contains('filter-empty')) return;
+    if (tr.querySelector('.empty')) { tr.hidden = !!q; return; }
+    const hit = !q || tr.textContent.toLowerCase().includes(q);
+    tr.hidden = !hit;
+    if (hit) shown += 1;
+  });
+  if (q && !shown) {
+    const tr = document.createElement('tr');
+    tr.className = 'filter-empty';
+    tr.innerHTML = `<td colspan="20" class="empty">No rows match “${esc(input.value)}”.</td>`;
+    tbody.appendChild(tr);
+  }
 }
 
 /* ---------------- Auth / shell ---------------- */
@@ -265,8 +354,8 @@ function renderLogin() {
       <h2>Welcome back</h2>
       <p class="lead">Sign in with your family account.</p>
       <form id="login-form">
-        <div class="field"><label>Username</label><input name="username" autocomplete="username" required autofocus></div>
-        <div class="field"><label>Password</label><input name="password" type="password" autocomplete="current-password" required></div>
+        <div class="field"><label for="login-username">Username</label><input id="login-username" name="username" autocomplete="username" required autofocus></div>
+        <div class="field"><label for="login-password">Password</label><input id="login-password" name="password" type="password" autocomplete="current-password" required></div>
         <button class="btn block" type="submit">Sign in</button>
       </form>
       <div class="login-note">Demo accounts: <b>admin / admin123</b> (super admin), <b>mom</b> or <b>dad / family123</b><br>Change these passwords after your first login.</div>
@@ -311,14 +400,17 @@ function renderShell() {
     <aside class="sidebar">
       <div class="brand"><div class="brand-logo">₹</div><div><div class="brand-name">RentFlow</div><div class="brand-sub">Family rent manager</div></div></div>
       <nav class="nav"><div class="nav-label">Workspace</div>${links}</nav>
-      <div class="sidebar-foot">Shared family database · Live sync on</div>
+      <div class="sidebar-foot">Shared family database · Live sync on
+        <button class="btn ghost sm" id="install-btn" data-act="install-app" style="display:none;margin-top:10px;width:100%;justify-content:center">📲 Install app</button>
+      </div>
     </aside>
     <div class="main">
       <div id="offline-banner" style="display:none;background:#b9770e;color:#fff;text-align:center;padding:8px;font-size:12px;font-weight:600">You are offline. Reconnect to sync with your family.</div>
       <header class="topbar">
         <div><h2 id="page-title">Dashboard</h2><div class="sub" id="page-sub">Everything at a glance</div></div>
         <div class="top-actions">
-          <select class="month-picker" data-change="month" title="Reporting month">
+          <button class="btn ghost sm search-trigger" data-act="search" aria-label="Search RentFlow">🔍 <span class="search-label">Search</span> <kbd>Ctrl K</kbd></button>
+          <select class="month-picker" data-change="month" title="Reporting month" aria-label="Reporting month">
             ${monthList().map((m) => `<option value="${m}"${m === S.month ? ' selected' : ''}>${mlabel(m)}</option>`).join('')}
           </select>
           <div class="user-chip"><div class="avatar">${initials(S.me.name)}</div><div class="who"><b>${esc(S.me.name)}</b><small>${S.me.role.replace('_', ' ')}</small></div></div>
@@ -329,6 +421,10 @@ function renderShell() {
     </div>
   </div>`;
   renderVoice();
+  if (deferredInstallPrompt) {
+    const install = $('#install-btn');
+    if (install) install.style.display = 'inline-flex';
+  }
 }
 
 function handleRoute() {
@@ -386,7 +482,12 @@ async function renderView() {
   const meta = NAV.find((n) => n.view === activeNav) || NAV[0];
   $('#page-title').innerHTML = meta.title;
   $('#page-sub').innerHTML = meta.sub;
-  $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === activeNav));
+  $$('.nav-item').forEach((b) => {
+    const active = b.dataset.view === activeNav;
+    b.classList.toggle('active', active);
+    if (active) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+  });
 
   const views = {
     dashboard: viewDashboard, rooms: viewRooms, tenants: viewTenants, tenant: viewTenantDetail,
@@ -419,23 +520,31 @@ function viewDashboard() {
   const paid = d.occupied_rooms ? Math.round((d.occupied_rooms / d.total_rooms) * 100) : 0;
   return `
   <div class="page-head"><div><h1>Namaste, ${esc(S.me.name.split(' ')[0])} 👋</h1><p>Collection and pending summary for ${mlabel(S.month)}.</p></div>
-    <button class="btn" data-act="open-payment">＋ Record payment</button></div>
+    <div class="btn-row"><button class="btn ghost" data-act="add-expense">＋ Expense</button>
+    <button class="btn ghost" data-act="add-tenant">＋ Tenant</button>
+    <button class="btn ghost" data-act="export-month">⬇ Month PDF</button>
+    <button class="btn" data-act="open-payment">＋ Record payment</button></div></div>
   <div class="grid stats">
-    ${statCard('Collected this month', money(d.collection_this_month), `${d.recent_payments.length} payment(s) recorded`, '💰', 'green')}
+    ${statCard('Collected this month', money(d.collection_this_month), `${d.recent_payments.length} payment(s) · ${d.collection_rate}% of expected`, '💰', 'green')}
     ${statCard('Pending right now', money(d.pending_total), `${d.pending_tenants.length} tenant(s) with dues`, '⏳', 'red')}
     ${statCard('Income this year', money(d.income_this_year), `${new Date().getFullYear()} total collection`, '📈', 'blue')}
     ${statCard('Expense this month', money(d.expense_this_month), `${money(d.expense_this_year)} this year`, '🧾', 'amber')}
   </div>
   <div class="grid split" style="margin-top:16px">
     <div class="card"><h3>Last 6 months <small>Collection vs expense</small></h3>${barsHtml(d.months, 'collection', 'expense', 'Collection', 'Expense')}</div>
-    <div class="card"><h3>Occupancy</h3>
+    <div class="card"><h3>Occupancy &amp; collection</h3>
       <div style="display:flex;align-items:center;gap:20px">
         <div class="donut" style="background:conic-gradient(var(--green-600) ${paid}%, #e6ece8 ${paid}% 100%)"></div>
         <div><div style="font-size:26px;font-weight:800;color:var(--green-700)">${paid}%</div>
-        <div class="muted small">${d.occupied_rooms} of ${d.total_rooms} rooms occupied</div>
+        <div class="muted small">${d.occupied_rooms} of ${d.total_rooms} rooms occupied · ${d.vacant_rooms} vacant</div>
         <button class="btn soft sm" style="margin-top:12px" data-act="nav" data-view="rooms">View rooms</button></div>
       </div>
-      <div style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
+      <div style="margin-top:16px">
+        <div class="small" style="display:flex;justify-content:space-between;margin-bottom:6px"><span class="muted">Collection progress</span><b>${d.collection_rate}%</b></div>
+        <div class="progress" role="progressbar" aria-valuenow="${d.collection_rate}" aria-valuemin="0" aria-valuemax="100"><span style="width:${d.collection_rate}%"></span></div>
+        <div class="muted small" style="margin-top:5px">${money(d.collection_this_month)} of ${money(d.expected_this_month)} expected (rent + electricity)</div>
+      </div>
+      <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
         <div class="strong">Total outstanding dues: ${money(d.dues_total)}</div>
         <div class="muted small" style="margin-top:4px">Includes carried-forward and partial-payment balances.</div>
       </div>
@@ -466,8 +575,10 @@ function viewRooms() {
   const elecFor = (id) => (S.electricity?.meters || []).find((m) => String(m.room_id) === String(id)) || {};
   const canEdit = S.me && (S.me.role === 'admin' || S.me.role === 'super_admin');
   return `<div class="page-head"><div><h1>Rooms</h1><p>${S.rooms.length} rooms · ${S.rooms.filter((r) => r.tenant).length} occupied · address, rent &amp; electricity in one place</p></div>
-    ${canEdit ? '<button class="btn" data-act="add-room">＋ Add room</button>' : ''}</div>
-  <div class="card"><div class="table-wrap"><table><thead><tr><th>Room</th><th>Complete address</th><th>Floor</th><th>Tenant</th>
+    <div class="btn-row">${canEdit ? '<button class="btn ghost" data-act="bulk-bills">⚡ Bulk bills</button>' : ''}
+    ${canEdit ? '<button class="btn" data-act="add-room">＋ Add room</button>' : ''}</div></div>
+  <div class="card">${filterBox('#rooms-table', 'Search room, tenant, floor or address…')}
+    <div class="table-wrap"><table id="rooms-table"><thead><tr><th>Room</th><th>Complete address</th><th>Floor</th><th>Tenant</th>
     <th class="num">Rent</th><th class="num">Electricity · ${mlabel(S.month)} (₹)</th>
     <th class="num">Collected</th><th class="num">Pending</th><th></th></tr></thead><tbody>
   ${S.rooms.map((r) => {
@@ -487,7 +598,7 @@ function viewRooms() {
       </td>
       <td class="num">${r.tenant ? money(r.collected) : '-'}</td>
       <td class="num" style="color:${r.pending > 0 ? 'var(--red)' : 'inherit'};font-weight:600">${r.tenant ? money(r.pending) : '-'}</td>
-      <td><div class="btn-row">${r.tenant ? `<button class="btn soft sm" data-act="open-payment" data-id="${r.tenant.id}">Collect</button>` : ''}
+      <td><div class="btn-row">${r.tenant ? `<button class="btn soft sm" data-act="open-payment" data-id="${r.tenant.id}">Collect</button>` : (canEdit ? `<button class="btn soft sm" data-act="add-tenant-room" data-id="${r.id}">＋ Tenant</button>` : '')}
         ${e.meter_no ? `<button class="btn ghost sm" data-act="elec-history" data-id="${r.id}">Bill history</button>` : ''}
         ${canEdit ? `<button class="btn ghost sm" data-act="edit-room" data-id="${r.id}">Edit</button>
         <button class="btn danger sm" data-act="del-room" data-id="${r.id}">Delete</button>` : ''}</div></td></tr>`;
@@ -500,7 +611,8 @@ function viewRooms() {
 function viewTenants() {
   return `<div class="page-head"><div><h1>Tenants</h1><p>Active family tenants and their balances.</p></div>
     <button class="btn" data-act="add-tenant">＋ Add tenant</button></div>
-  <div class="card"><div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Phone</th><th>Joined</th><th class="num">Dues</th><th>Last payment</th><th></th></tr></thead><tbody>
+  <div class="card">${filterBox('#tenants-table', 'Search name, room or phone…')}
+    <div class="table-wrap"><table id="tenants-table"><thead><tr><th>Tenant</th><th>Room</th><th>Phone</th><th>Joined</th><th class="num">Dues</th><th>Last payment</th><th></th></tr></thead><tbody>
   ${S.tenants.map((t) => `<tr>
     <td class="strong"><a href="#/tenants/${t.id}">${esc(t.name)}</a></td><td>${esc(t.room_no || '-')}</td><td>${esc(t.phone || '-')}</td>
     <td class="muted">${dstr(t.join_date)}</td>
@@ -521,6 +633,7 @@ async function viewTenantDetail() {
   const photo = t.photo_file_id ? `/api/files/${t.photo_file_id}` : '';
   return `<div class="page-head"><div><h1>${esc(t.name)}</h1><p>Room ${esc(t.room_no || '-')} · Joined ${dstr(t.join_date)} · ${t.active ? 'Active' : 'Vacated'}</p></div>
     <div class="btn-row"><button class="btn" data-act="open-payment" data-id="${t.id}">💰 Record payment</button>
+    <button class="btn ghost" data-act="ledger-pdf" data-id="${t.id}" data-name="${esc(t.name)}">⬇ Ledger PDF</button>
     <button class="btn ghost" data-act="nav" data-view="tenants">← Back</button></div></div>
   <div class="grid split">
     <div class="card"><h3>Payment history</h3>
@@ -581,9 +694,11 @@ function viewPayments() {
   return `<div class="page-head"><div><h1>Rent payments</h1><p>${list.length} payment(s) · ${money(total)} total</p></div>
     <div class="btn-row"><button class="btn ghost" data-act="toggle-all-payments">${S.paymentsAll ? 'Show selected month' : 'Show all months'}</button>
     <button class="btn ghost" data-act="export-payments">⬇ Export PDF</button>
+    ${S.me.role === 'super_admin' || S.me.role === 'admin' ? '<button class="btn ghost" data-act="export-csv" data-type="payments">⬇ CSV</button>' : ''}
     <button class="btn" data-act="open-payment">＋ Record payment</button></div></div>
   <div class="card"><h3>Room-aware collection <small>Partial payments keep the balance visible as a due</small></h3>
-    <div class="table-wrap"><table><thead><tr><th>Receipt</th><th>Tenant</th><th>Room</th><th>Month</th><th>Mode</th><th class="num">Rent</th><th class="num">Extra</th><th class="num">Due adj.</th><th class="num">Received</th><th class="num">Pending</th><th></th></tr></thead><tbody>
+    ${filterBox('#payments-table', 'Search tenant, receipt, room or mode…')}
+    <div class="table-wrap"><table id="payments-table"><thead><tr><th>Receipt</th><th>Tenant</th><th>Room</th><th>Month</th><th>Mode</th><th class="num">Rent</th><th class="num">Extra</th><th class="num">Due adj.</th><th class="num">Received</th><th class="num">Pending</th><th></th></tr></thead><tbody>
   ${list.map((p) => `<tr><td class="small">${esc(p.receipt_no || '-')}</td><td class="strong">${esc(p.tenant_name || '-')}</td><td>${esc(p.room_no || '-')}</td>
     <td>${mlabel(p.month)}</td><td class="small muted">${esc(p.mode)}</td><td class="num">${money(p.rent_amount)}</td>
     <td class="num">${p.extra_charges ? money(p.extra_charges) : '-'}</td><td class="num">${p.dues_adjusted ? money(p.dues_adjusted) : '-'}</td>
@@ -600,6 +715,7 @@ function viewDues() {
   const total = S.dues.reduce((s, d) => s + Number(d.amount || 0), 0);
   return `<div class="page-head"><div><h1>Pending dues</h1><p>Carry forward, settle later, remind or receipt — all in one place.</p></div>
     <div class="btn-row"><button class="btn ghost" data-act="dues-tab" data-tab="${S.duesTab === 'pending' ? 'settled' : 'pending'}">${S.duesTab === 'pending' ? 'Show settled' : 'Show pending'}</button>
+    ${S.me.role === 'super_admin' || S.me.role === 'admin' ? '<button class="btn ghost" data-act="export-csv" data-type="dues">⬇ CSV</button>' : ''}
     <button class="btn" data-act="add-due">＋ Add extra due</button></div></div>
   <div class="grid stats">
     ${statCard('Total outstanding', money(total), `${S.dues.length} open dues`, '⏳', 'red')}
@@ -607,7 +723,8 @@ function viewDues() {
     ${statCard('Tenants with dues', new Set(S.dues.map((d) => d.tenant_id)).size, 'Across all rooms', '👥', 'amber')}
     ${statCard('Oldest due month', S.dues.length ? mlabel(S.dues.map((d) => d.month).sort()[0]) : '-', 'Settle the oldest first', '📅', 'blue')}
   </div>
-  <div class="card" style="margin-top:16px"><div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th>Month</th><th>Reason</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead><tbody>
+  <div class="card" style="margin-top:16px">${filterBox('#dues-table', 'Search tenant, room, reason or month…')}
+    <div class="table-wrap"><table id="dues-table"><thead><tr><th>Tenant</th><th>Room</th><th>Month</th><th>Reason</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead><tbody>
   ${list.map((d) => `<tr><td class="strong">${esc(d.tenant_name || '-')}</td><td>${esc(d.room_no || '-')}</td><td>${mlabel(d.month)}</td>
     <td class="small">${esc(d.reason)}</td><td class="num strong" style="color:${d.settled ? 'inherit' : 'var(--red)'}">${money(d.amount)}</td>
     <td>${d.settled ? '<span class="badge ok">Settled</span>' : '<span class="badge warn">Pending</span>'}</td>
@@ -624,8 +741,10 @@ function viewDues() {
 function viewExpenses() {
   const total = S.expenses.reduce((s, e) => s + Number(e.amount || 0), 0);
   return `<div class="page-head"><div><h1>Expenses</h1><p>${S.expenses.length} entries · ${money(total)} recorded</p></div>
-    <button class="btn" data-act="add-expense">＋ Add expense</button></div>
-  <div class="card"><div class="table-wrap"><table><thead><tr><th>Title</th><th>Category</th><th>Date</th><th>Note</th><th class="num">Amount</th><th></th></tr></thead><tbody>
+    <div class="btn-row">${S.me.role === 'super_admin' || S.me.role === 'admin' ? '<button class="btn ghost" data-act="export-csv" data-type="expenses">⬇ CSV</button>' : ''}
+    <button class="btn" data-act="add-expense">＋ Add expense</button></div></div>
+  <div class="card">${filterBox('#expenses-table', 'Search title, category or note…')}
+    <div class="table-wrap"><table id="expenses-table"><thead><tr><th>Title</th><th>Category</th><th>Date</th><th>Note</th><th class="num">Amount</th><th></th></tr></thead><tbody>
   ${S.expenses.map((e) => `<tr><td class="strong">${esc(e.title)}</td><td><span class="badge info">${esc(e.category)}</span></td>
     <td>${dstr(e.expense_date)}</td><td class="muted small">${esc(e.note || '-')}</td><td class="num strong">${money(e.amount)}</td>
     <td><div class="btn-row"><button class="btn ghost sm" data-act="edit-expense" data-id="${e.id}">Edit</button>
@@ -650,7 +769,8 @@ function viewElectricity() {
     ${statCard('Bill this month', money(totalAmount), 'Based on saved readings', '🧾', 'amber')}
     ${statCard('Data source', e.config.apiConfigured ? 'API connected' : 'Manual + BSES link', e.config.apiConfigured ? 'Online fetch enabled' : 'No provider API configured', '🌐', '')}
   </div>
-  <div class="card" style="margin-top:16px"><div class="table-wrap"><table>
+  <div class="card" style="margin-top:16px">${filterBox('#electricity-table', 'Search flat, tenant, meter or provider…')}
+    <div class="table-wrap"><table id="electricity-table">
     <thead><tr><th>Flat</th><th>Tenant</th><th>Meter no.</th><th>CA no.</th><th>Provider</th>
       <th class="num">Last reading</th><th class="num">Units · ${esc(String(e.month || S.month).slice(5))}</th>
       <th class="num">Amount</th><th></th></tr></thead><tbody>
@@ -698,12 +818,13 @@ function viewReports() {
     acc = end;
     return `${catColors[i % catColors.length]} ${start}% ${end}%`;
   }).join(', ');
-  return `<div class="page-head"><div><h1>Reports</h1><p>Collection, pending dues and yearly summaries for ${r.year}.</p></div></div>
+  return `<div class="page-head"><div><h1>Reports</h1><p>Collection, pending dues and yearly summaries for ${r.year}.</p></div>
+    <div class="btn-row"><button class="btn ghost" data-act="export-month">⬇ ${mlabel(S.month)} PDF</button></div></div>
   <div class="grid stats">
     ${statCard('Yearly collection', money(r.yearly_collection), r.year, '💰', 'green')}
     ${statCard('Yearly expenses', money(r.yearly_expense), r.year, '🧾', 'amber')}
     ${statCard('Net this year', money(r.yearly_collection - r.yearly_expense), 'Collection minus expenses', '📈', 'blue')}
-    ${statCard('Pending dues', money(r.pending_total), `${r.pending.length} tenant(s)`, '⏳', 'red')}
+    ${statCard('Pending dues', money(r.pending_total), `${r.pending.length} tenant(s) · ${r.collection_rate}% collected`, '⏳', 'red')}
   </div>
   <div class="card" style="margin-top:16px"><h3>Monthly collection &amp; expenses <small>Last 12 months</small></h3>${barsHtml(r.monthly, 'collection', 'expense', 'Collection', 'Expense')}</div>
   <div class="grid two" style="margin-top:16px">
@@ -718,7 +839,8 @@ function viewReports() {
     </div>
   </div>
   <div class="card" style="margin-top:16px"><h3>Pending dues detail</h3>
-    ${r.pending.length ? `<div class="table-wrap"><table><thead><tr><th>Tenant</th><th>Room</th><th class="num">Rent</th><th class="num">Electricity</th><th class="num">Paid</th><th class="num">Old dues</th><th class="num">Pending</th></tr></thead><tbody>
+    ${r.pending.length ? `${filterBox('#report-pending-table', 'Search tenant or room…')}
+    <div class="table-wrap"><table id="report-pending-table"><thead><tr><th>Tenant</th><th>Room</th><th class="num">Rent</th><th class="num">Electricity</th><th class="num">Paid</th><th class="num">Old dues</th><th class="num">Pending</th></tr></thead><tbody>
     ${r.pending.map((p) => `<tr><td class="strong">${esc(p.name)}</td><td>${esc(p.room_no)}</td><td class="num">${money(p.rent)}</td><td class="num">${money(p.electricity_bill)}</td><td class="num">${money(p.paid)}</td>
     <td class="num">${money(p.dues)}</td><td class="num strong" style="color:var(--red)">${money(p.pending)}</td></tr>`).join('')}
     </tbody></table></div>` : '<div class="empty">No pending dues. 🎉</div>'}
@@ -732,7 +854,8 @@ function viewActivity() {
     <button class="btn ghost" data-act="export-activity">⬇ Export PDF</button></div>
   <div class="card">
     <div class="muted small" style="padding:12px 16px 0">Changes in <b>${Object.values(groups).join(', ')}</b> include the exact fields that were edited — for example <i>Electricity bill: ₹0 → ₹1,200</i>.</div>
-    ${rows.length ? `<div class="table-wrap"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Area</th><th>Record</th><th>What changed</th></tr></thead><tbody>
+    ${rows.length ? `${filterBox('#activity-table', 'Search who, action, area or value…')}
+    <div class="table-wrap"><table id="activity-table"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Area</th><th>Record</th><th>What changed</th></tr></thead><tbody>
     ${rows.map((a) => `<tr>
       <td class="muted small">${dstr(a.created_at)}</td>
       <td class="strong">${esc(a.user_name || 'System')}</td>
@@ -756,6 +879,19 @@ function viewAdmin() {
     <button class="btn amber sm" data-act="toggle-user" data-id="${u.id}" data-active="${u.active ? 0 : 1}">${u.active ? 'Deactivate' : 'Activate'}</button>
     <button class="btn danger sm" data-act="del-user" data-id="${u.id}">Delete</button></div></td></tr>`).join('')}
   </tbody></table></div></div>
+  <div class="card" style="margin-top:16px"><h3>Data &amp; backup <small>Download anytime</small></h3>
+    <p class="muted small" style="line-height:1.6">Keep a copy of the family rent book before big changes or when moving to a new server. The JSON backup contains every room, tenant, payment, due, expense, meter and activity entry. Passwords and uploaded document contents are not included.</p>
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn" data-act="download-backup">⬇ Full backup (JSON)</button>
+      <button class="btn ghost" data-act="export-csv" data-type="payments">Payments CSV</button>
+      <button class="btn ghost" data-act="export-csv" data-type="dues">Dues CSV</button>
+      <button class="btn ghost" data-act="export-csv" data-type="tenants">Tenants CSV</button>
+      <button class="btn ghost" data-act="export-csv" data-type="rooms">Rooms CSV</button>
+      <button class="btn ghost" data-act="export-csv" data-type="expenses">Expenses CSV</button>
+      <button class="btn ghost" data-act="export-csv" data-type="electricity">Electricity CSV</button>
+      <button class="btn ghost" data-act="export-csv" data-type="bills">Bills CSV</button>
+    </div>
+  </div>
   <div class="card" style="margin-top:16px"><h3>Start with a clean rent book</h3>
     <p class="muted small">Remove the sample rooms, tenants, payments, dues, expenses and electricity records so you can enter your own family's data. User accounts and passwords are kept. This cannot be undone and the demo data will not return after a restart.</p>
     <button class="btn danger" data-act="clear-demo-data">Clear all demo data</button>
@@ -782,6 +918,13 @@ function viewAccount() {
         <div class="field full"><button class="btn" type="submit">Update password</button></div>
       </form>
     </div>
+    ${S.me.role === 'admin' || S.me.role === 'super_admin' ? `<div class="card" style="grid-column:1/-1"><h3>Data &amp; backup</h3>
+      <p class="muted small" style="line-height:1.6">Download a safe copy of the family rent book. The JSON backup includes rooms, tenants, payments, dues, expenses, meters and activity; passwords and uploaded document contents are excluded.</p>
+      <div class="btn-row"><button class="btn" data-act="download-backup">⬇ Full backup (JSON)</button>
+      <button class="btn ghost" data-act="export-csv" data-type="payments">Payments CSV</button>
+      <button class="btn ghost" data-act="export-csv" data-type="dues">Dues CSV</button>
+      <button class="btn ghost" data-act="export-csv" data-type="tenants">Tenants CSV</button></div>
+    </div>` : ''}
   </div>`;
 }
 
@@ -810,14 +953,31 @@ function openRoomModal(id) {
   });
 }
 
-function openTenantModal(id) {
+// Enter the whole month's electricity bills in one pass instead of row by row.
+function openBulkBillsModal() {
+  openModal({
+    title: `Electricity bills · ${mlabel(S.month)}`,
+    wide: true,
+    body: `<form data-form="bulk-bills">
+      <div class="callout">Type the bill amount for each flat for <b>${mlabel(S.month)}</b>. Only changed rooms are saved, and every change is recorded in the activity log.</div>
+      <div class="form-grid" style="margin-top:14px">
+        ${S.rooms.map((r) => `<div class="field"><label>Room ${esc(r.room_no)}${r.tenant ? ` · ${esc(r.tenant.name)}` : ' · Vacant'}</label>
+          <input type="number" min="0" step="1" name="bill_${r.id}" value="${esc(r.electricity_bill || 0)}" aria-label="Electricity bill for room ${esc(r.room_no)}"></div>`).join('')}
+      </div>
+    </form>`,
+    foot: `<button class="btn ghost" data-act="close-modal">Cancel</button><button class="btn" data-act="submit-form" data-target="bulk-bills">Save all bills</button>`,
+  });
+}
+
+function openTenantModal(id, presetRoomId) {
   const t = S.tenants.find((x) => String(x.id) === String(id)) || {};
+  const selectedRoom = id ? t.room_id : presetRoomId;
   openModal({
     title: id ? 'Edit tenant' : 'Add tenant',
     body: `<form data-form="tenant" class="form-grid">
       <input type="hidden" name="id" value="${esc(t.id || '')}">
       <div class="field"><label>Tenant name *</label><input name="name" value="${esc(t.name || '')}" required></div>
-      <div class="field"><label>Room</label><select name="room_id"><option value="">— Vacant / unassigned —</option>${roomOptions(t.room_id)}</select></div>
+      <div class="field"><label>Room</label><select name="room_id"><option value="">— Vacant / unassigned —</option>${roomOptions(selectedRoom)}</select></div>
       <div class="field"><label>Phone (with country code)</label><input name="phone" value="${esc(t.phone || '')}" placeholder="9876543210"></div>
       <div class="field"><label>Email</label><input name="email" value="${esc(t.email || '')}"></div>
       <div class="field"><label>Join date</label><input type="month" name="join_date" value="${esc(String(t.join_date || thisMonth()).slice(0, 7))}"></div>
@@ -840,6 +1000,8 @@ function openPaymentModal(tenantId) {
   const tenantsWithRooms = S.tenants.filter((t) => t.room_id);
   const tid = tenantId || (tenantsWithRooms[0] && tenantsWithRooms[0].id);
   const t = S.tenants.find((x) => String(x.id) === String(tid)) || tenantsWithRooms[0] || {};
+  const room = S.rooms.find((r) => String(r.id) === String(t.room_id)) || {};
+  const bill = Number(room.electricity_bill || 0);
   openModal({
     title: 'Record rent payment', wide: true,
     body: `<form data-form="payment" class="form-grid">
@@ -847,9 +1009,9 @@ function openPaymentModal(tenantId) {
         ${tenantsWithRooms.map((x) => `<option value="${x.id}"${String(x.id) === String(t.id) ? ' selected' : ''}>Room ${esc(x.room_no)} · ${esc(x.name)}</option>`).join('')}
       </select></div>
       <div class="field"><label>Tenant</label><select name="tenant_id" data-change="payment-tenant">${tenantOptions(t.id)}</select></div>
-      <div class="field"><label>Month</label><input type="month" name="month" value="${S.month}"></div>
+      <div class="field"><label>Month</label><input type="month" name="month" value="${S.month}" data-change="payment-month"></div>
       <div class="field"><label>Rent amount (₹)</label><input type="number" name="rent_amount" min="0" value="${esc(t.room_rent || 0)}"></div>
-      <div class="field"><label>Extra due / additional charge (₹)</label><input type="number" name="extra_charges" min="0" value="0" placeholder="Electricity, water…"></div>
+      <div class="field"><label>Electricity / extra charge (₹)</label><input type="number" name="extra_charges" min="0" value="${esc(bill)}" placeholder="Electricity, water…"></div>
       <div class="field"><label>Amount received (₹) *</label><input type="number" name="amount" min="1" required placeholder="0"></div>
       <div class="field"><label>Payment mode</label><select name="mode">
         <option value="cash">Cash</option><option value="upi">UPI / GPay / PhonePe</option><option value="bank">Bank transfer</option><option value="cheque">Cheque</option><option value="other">Other</option>
@@ -866,17 +1028,28 @@ function openPaymentModal(tenantId) {
   updatePayHint();
 }
 
+function paymentTotals(f) {
+  const rent = Number(v(f, 'rent_amount') || 0);
+  const extra = Number(v(f, 'extra_charges') || 0);
+  const month = v(f, 'month') || S.month;
+  const tenantId = v(f, 'tenant_id');
+  const advanced = $$('input[name="adjust_due_ids"]:checked', f)
+    .reduce((s, el) => s + Number(S.dues.find((d) => String(d.id) === el.value)?.amount || 0), 0);
+  const paid = S.payments
+    .filter((p) => String(p.tenant_id) === String(tenantId) && p.month === month)
+    .reduce((s, p) => s + Number(p.amount || 0), 0);
+  const current = Math.max(0, rent + extra - paid);
+  return { rent, extra, advanced, paid, month, current, payable: current + advanced };
+}
+
 function updatePayHint() {
   const f = $('[data-form="payment"]');
   if (!f) return;
-  const rent = Number(v(f, 'rent_amount') || 0);
-  const extra = Number(v(f, 'extra_charges') || 0);
-  const advanced = $$('input[name="adjust_due_ids"]:checked', f)
-    .reduce((s, el) => s + Number(S.dues.find((d) => String(d.id) === el.value)?.amount || 0), 0);
-  const payable = rent + extra + advanced;
+  const t = paymentTotals(f);
   const received = Number(v(f, 'amount') || 0);
-  $('#pay-hint').innerHTML = `Total payable: <b>${money(payable)}</b> (rent ${money(rent)} + extra ${money(extra)} + old dues ${money(advanced)})
-    ${received ? ` · ${received >= payable ? 'Fully settled' : `Remaining after this payment: <b style="color:var(--red)">${money(payable - received)}</b>`}` : ''}`;
+  $('#pay-hint').innerHTML = `Remaining to collect for ${mlabel(t.month)}: <b>${money(t.payable)}</b>
+    (rent + electricity ${money(t.rent + t.extra)} − already paid ${money(t.paid)} + old dues ${money(t.advanced)})
+    ${received ? ` · ${received >= t.payable ? 'Fully settled' : `Remaining after this payment: <b style="color:var(--red)">${money(t.payable - received)}</b>`}` : ''}`;
 }
 
 function openDueModal(id) {
@@ -1081,6 +1254,18 @@ const FORMS = {
     });
     return 'Room saved.';
   },
+  async 'bulk-bills'(f) {
+    let saved = 0;
+    for (const room of S.rooms) {
+      const input = f.elements[`bill_${room.id}`];
+      if (!input) continue;
+      const amount = Math.max(0, Math.round(Number(input.value) || 0));
+      if (amount === Number(room.electricity_bill || 0)) continue;
+      await api(`/rooms/${room.id}`, { method: 'PUT', body: { electricity_bill: amount, month: S.month } });
+      saved += 1;
+    }
+    return saved ? `${saved} bill(s) saved for ${mlabel(S.month)}.` : 'No bill changes to save.';
+  },
   async tenant(f) {
     const id = v(f, 'id');
     await api(id ? `/tenants/${id}` : '/tenants', {
@@ -1224,6 +1409,15 @@ async function nativeCapture(kind, tenantId, source) {
 
 const ACTIONS = {
   nav: (el) => go(el.dataset.view),
+  search: () => openSearch(),
+  'search-room': (el) => {
+    if (el.dataset.tenant) { go('tenants', el.dataset.tenant); return; }
+    go('rooms');
+    setTimeout(() => {
+      const input = $('[data-filter="#rooms-table"]');
+      if (input) input.focus();
+    }, 120);
+  },
   logout: async () => { await api('/auth/logout', { method: 'POST' }); location.hash = ''; location.reload(); },
   'close-modal': () => closeModal(),
   'modal-backdrop': (el, ev) => { if (ev.target === el) closeModal(); },
@@ -1232,11 +1426,13 @@ const ACTIONS = {
     if (f) f.requestSubmit();
   },
   'add-room': () => openRoomModal(),
+  'bulk-bills': () => openBulkBillsModal(),
   'edit-room': (el) => openRoomModal(el.dataset.id),
   'del-room': (el) => confirmAction('Delete room', 'Permanently delete this room? Its tenant must be vacated first.', async () => {
     await api(`/rooms/${el.dataset.id}`, { method: 'DELETE' }); await loadData(); renderView(); toast('Room deleted.');
   }),
   'add-tenant': () => openTenantModal(),
+  'add-tenant-room': (el) => openTenantModal(null, el.dataset.id),
   'edit-tenant': (el) => openTenantModal(el.dataset.id),
   'view-tenant': (el) => go('tenants', el.dataset.id),
   'vacate-tenant': (el) => confirmAction('Mark vacated', 'Mark this tenant as vacated? The room becomes available. Payment history is kept.', async () => {
@@ -1249,10 +1445,7 @@ const ACTIONS = {
   'fill-full-amount': () => {
     const f = $('[data-form="payment"]');
     if (!f) return;
-    const rent = Number(v(f, 'rent_amount') || 0);
-    const extra = Number(v(f, 'extra_charges') || 0);
-    const adv = $$('input[name="adjust_due_ids"]:checked', f).reduce((s, el) => s + Number(S.dues.find((d) => String(d.id) === el.value)?.amount || 0), 0);
-    f.elements.amount.value = rent + extra + adv;
+    f.elements.amount.value = paymentTotals(f).payable;
     updatePayHint();
   },
   receipt: (el) => openReceipt(el.dataset.id),
@@ -1365,6 +1558,24 @@ const ACTIONS = {
     `rentflow-activity-${new Date().toISOString().slice(0, 10)}.pdf`),
   'export-payments': () => downloadPdf(`/payments/export/pdf?all=${S.paymentsAll ? 1 : 0}&month=${S.month}`,
     `rentflow-payments-${S.month}.pdf`),
+  'export-month': () => downloadPdf(`/reports/month/pdf?month=${S.month}`,
+    `rentflow-summary-${S.month}.pdf`),
+  'ledger-pdf': (el) => {
+    const slug = String(el.dataset.name || 'tenant').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    downloadPdf(`/tenants/${el.dataset.id}/ledger/pdf`, `rentflow-ledger-${slug || el.dataset.id}.pdf`);
+  },
+  'export-csv': (el) => downloadFile(`/admin/export/${el.dataset.type}.csv`,
+    `rentflow-${el.dataset.type}-${new Date().toISOString().slice(0, 10)}.csv`, 'CSV downloaded.'),
+  'download-backup': () => downloadFile('/admin/backup',
+    `rentflow-backup-${new Date().toISOString().slice(0, 10)}.json`, 'Backup downloaded.'),
+  'install-app': async () => {
+    if (!deferredInstallPrompt) { toast('Use your browser menu → “Install app” to add RentFlow.'); return; }
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    const btn = $('#install-btn');
+    if (btn) btn.style.display = 'none';
+  },
   'add-user': () => openUserModal(),
   'edit-user': (el) => openUserModal(el.dataset.id),
   'toggle-user': (el) => confirmAction(el.dataset.active === '0' ? 'Activate user' : 'Deactivate user',
@@ -1422,11 +1633,28 @@ const CHANGES = {
     }
   },
   month: (el) => { S.month = el.value; loadData().then(renderView); },
+  'payment-month': async (el) => {
+    const f = el.closest('form');
+    if (!f) return;
+    const t = S.tenants.find((x) => String(x.id) === v(f, 'tenant_id'));
+    if (!t) return;
+    try {
+      const r = await api(`/rooms?month=${el.value}`);
+      const room = (r.rooms || []).find((x) => String(x.id) === String(t.room_id));
+      if (room) {
+        f.elements.rent_amount.value = room.rent || t.room_rent || 0;
+        f.elements.extra_charges.value = room.electricity_bill || 0;
+      }
+      updatePayHint();
+    } catch (e) { /* keep the current values if the lookup fails */ }
+  },
   'payment-tenant': (el) => {
     const f = el.closest('form');
     const t = S.tenants.find((x) => String(x.id) === el.value);
     if (t) {
-      f.elements.rent_amount.value = t.room_rent || 0;
+      const room = S.rooms.find((r) => String(r.id) === String(t.room_id)) || {};
+      f.elements.rent_amount.value = t.room_rent || room.rent || 0;
+      f.elements.extra_charges.value = room.electricity_bill || 0;
       const roomSelect = $('[data-change="payment-room"]', f);
       if (roomSelect) roomSelect.value = t.id;
     }
@@ -1437,7 +1665,11 @@ const CHANGES = {
     const f = el.closest('form');
     f.elements.tenant_id.value = el.value;
     const t = S.tenants.find((x) => String(x.id) === el.value);
-    if (t) f.elements.rent_amount.value = t.room_rent || 0;
+    if (t) {
+      const room = S.rooms.find((r) => String(r.id) === String(t.room_id)) || {};
+      f.elements.rent_amount.value = t.room_rent || room.rent || 0;
+      f.elements.extra_charges.value = room.electricity_bill || 0;
+    }
     $('#due-options').innerHTML = dueOptionsHtml(el.value);
     updatePayHint();
   },
@@ -1454,7 +1686,23 @@ document.addEventListener('change', (ev) => {
   if (el && CHANGES[el.dataset.change]) CHANGES[el.dataset.change](el, ev);
 });
 document.addEventListener('input', (ev) => {
+  const filter = ev.target.closest('[data-filter]');
+  if (filter) { applyTableFilter(filter); return; }
   if (ev.target.closest('[data-form="payment"]')) updatePayHint();
+});
+
+// Global shortcuts: Ctrl/Cmd+K opens search, Escape closes the top layer.
+document.addEventListener('keydown', (ev) => {
+  if ((ev.ctrlKey || ev.metaKey) && String(ev.key).toLowerCase() === 'k') {
+    if (!S.me) return;
+    ev.preventDefault();
+    openSearch();
+    return;
+  }
+  if (ev.key === 'Escape') {
+    if ($('#modal-root').innerHTML.trim()) { closeModal(); return; }
+    if (S.voiceOpen) { S.voiceOpen = false; renderVoice(); }
+  }
 });
 
 /* ---------------- Voice assistant (UI stub) ---------------- */
@@ -1499,4 +1747,15 @@ function runVoiceCommand(cmd) {
 }
 
 /* ---------------- Start ---------------- */
+window.addEventListener('beforeinstallprompt', (ev) => {
+  ev.preventDefault();
+  deferredInstallPrompt = ev;
+  const btn = $('#install-btn');
+  if (btn) btn.style.display = 'inline-flex';
+});
+
+if ('serviceWorker' in navigator && !IS_NATIVE && /^https?:$/.test(location.protocol)) {
+  navigator.serviceWorker.register('/sw.js').catch(() => { /* offline shell is optional */ });
+}
+
 boot();

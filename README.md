@@ -17,8 +17,11 @@ A family rent manager built for one very specific reality: **everyone in the fam
 | Receipts | Server-generated PDF receipts, copyable receipt text and shareable receipt links with QR codes |
 | Documents | Tenant photo and PDF uploads stored **inside the database**, viewer and download buttons |
 | Admin control | Super admin can add users, change roles, deactivate users, reset passwords and permanently delete accounts |
-| Reporting | Monthly collection vs expenses, pending dues, yearly income, expense categories and room-wise collection |
-| Electricity | Per-flat BSES meter/CA numbers, monthly readings with auto units and bill, full history, official bill links and optional online API fetch |
+| Reporting | Monthly collection vs expenses, pending dues, yearly income, expense categories, room-wise collection, a one-click month summary PDF and a per-tenant ledger PDF |
+| Electricity | Per-flat BSES meter/CA numbers, monthly readings with auto units and bill, full history, official bill links, optional online API fetch, per-month bill editing and a bulk bill entry screen |
+| Find things fast | Global search (`Ctrl`/`Cmd` + `K`) across rooms, tenants, receipts and pages, plus search boxes on every table |
+| Backups | Download the full rent book as JSON, or export payments, dues, tenants, rooms, expenses, electricity and bills as CSV from **Admin → Data & backup** |
+| Installable app | Web app manifest and offline app shell so RentFlow can be added to a phone home screen; live rent data still needs a connection |
 
 ---
 
@@ -151,6 +154,18 @@ Run `npm run mobile:sync` after changing the URL. The URL is baked into the nati
 - If the amount received is less than the payable amount, the balance is automatically saved as a **new due** for that month (`Partial payment / आंशिक भुगतान`) and appears on the Dues screen and dashboards. Untick *"keep remaining visible as a due"* if you don't want this.
 - On the **Dues** screen you can **Settle** (creates a settlement payment + receipt), **Carry →** (move it to next month), **Remind** (WhatsApp + QR), edit or delete.
 - **PDF receipt** is generated on the fly at `/api/payments/:id/receipt/pdf`. The shareable QR link opens a public, token-protected receipt/reminder page.
+- Each month's pending balance is `rent + that month's electricity bill − amount paid + old dues`. The dashboard shows the expected collection (rent + electricity for every occupied flat) and a collection-rate bar.
+
+---
+
+## Backups and exports
+
+Open **Admin → Data & backup** (admins and super admins) to download:
+
+- **Full backup (JSON)** — every room, tenant, payment, due, expense, meter, reading, monthly bill and activity entry. User passwords and uploaded document contents are intentionally excluded.
+- **CSV files** — payments, dues, tenants, rooms, expenses, electricity readings and per-month bills. These open directly in Excel/Google Sheets (UTF-8 BOM keeps ₹ and Hindi text readable).
+
+On the **Tenants** page, open a tenant profile and use **⬇ Ledger PDF** for a complete month-by-month payment/due statement. The **Reports** page exports the selected month's summary and pending detail as a PDF.
 
 ---
 
@@ -237,9 +252,9 @@ auth.js              JWT cookie auth and role guards
 utils.js             money/month/reminder/receipt helpers
 lib/data.js          Dashboard/report aggregations
 lib/share.js         QR + public share pages
-lib/pdf.js           PDF receipt generator
+lib/pdf.js           PDF receipts, tenant ledgers, payment/activity/month exports
 routes/              REST endpoints grouped by feature
-public/              Shared browser/mobile UI (index.html, styles.css, js/app.js, js/native.js)
+public/              Shared browser/mobile UI (index.html, styles.css, js/app.js, js/native.js, sw.js, manifest.webmanifest)
 capacitor.config.js  Mobile app config (server URL, app id, plugins)
 scripts/native-entry.js Source for the native bridge bundle
 android/             Generated Android Studio project

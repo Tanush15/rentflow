@@ -4,8 +4,8 @@ const express = require('express');
 const db = require('../db');
 const auth = require('../auth');
 const data = require('../lib/data');
-const { activityPdf } = require('../lib/pdf');
-const { asyncHandler, currentMonth } = require('../utils');
+const { activityPdf, monthSummaryPdf } = require('../lib/pdf');
+const { asyncHandler, currentMonth, monthLabel } = require('../utils');
 
 const router = express.Router();
 router.use(auth.authRequired);
@@ -35,6 +35,16 @@ router.get('/activity/pdf', asyncHandler(async (req, res) => {
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition',
     `attachment; filename="rentflow-activity-${new Date().toISOString().slice(0, 10)}.pdf"`);
+  res.send(pdf);
+}));
+
+router.get('/month/pdf', asyncHandler(async (req, res) => {
+  const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : currentMonth();
+  const report = await data.reports(month);
+  const pdf = await monthSummaryPdf(report);
+  const stamp = monthLabel(month).replace(/\s+/g, '-').toLowerCase();
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="rentflow-summary-${stamp}.pdf"`);
   res.send(pdf);
 }));
 

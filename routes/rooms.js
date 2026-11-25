@@ -45,7 +45,7 @@ router.post('/', auth.requireRole('admin', 'super_admin'), asyncHandler(async (r
   const billAmount = Math.max(0, num(electricity_bill));
   const created = {
     room_no: String(room_no).trim(), floor: floor || null, address: address || null,
-    rent: num(rent), electricity_bill: billAmount, notes: notes || null,
+    rent: Math.max(0, num(rent)), electricity_bill: billAmount, notes: notes || null,
   };
   const result = await db.run(
     'INSERT INTO rooms (room_no, floor, address, rent, electricity_bill, notes) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
@@ -63,6 +63,10 @@ router.put('/:id', auth.requireRole('admin', 'super_admin'), asyncHandler(async 
   const room = await db.get('SELECT * FROM rooms WHERE id = ?', [id]);
   if (!room) return res.status(404).json({ error: 'Room not found.' });
   const { room_no, floor, address, rent, electricity_bill, notes, month } = req.body || {};
+  if (room_no && String(room_no).trim() !== room.room_no) {
+    const exists = await db.get('SELECT id FROM rooms WHERE room_no = ? AND id != ?', [String(room_no).trim(), room.id]);
+    if (exists) return res.status(400).json({ error: 'A room with that number already exists.' });
+  }
   const billMonthValue = billMonth(month);
   const billRow = await db.get(
     'SELECT amount FROM room_electricity_bills WHERE room_id = ? AND month = ?', [room.id, billMonthValue]
@@ -73,7 +77,7 @@ router.put('/:id', auth.requireRole('admin', 'super_admin'), asyncHandler(async 
     room_no: room_no || room.room_no,
     floor: floor ?? room.floor,
     address: address ?? room.address,
-    rent: rent !== undefined ? num(rent) : room.rent,
+    rent: rent !== undefined ? Math.max(0, num(rent)) : room.rent,
     electricity_bill: newBill,
     notes: notes ?? room.notes,
   };

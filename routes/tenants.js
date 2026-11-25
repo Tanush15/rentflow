@@ -5,6 +5,7 @@ const multer = require('multer');
 const db = require('../db');
 const auth = require('../auth');
 const data = require('../lib/data');
+const { tenantLedgerPdf } = require('../lib/pdf');
 const { asyncHandler, logActivity, notify } = require('../utils');
 
 const router = express.Router();
@@ -68,6 +69,16 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const detail = await data.tenantDetail(req.params.id);
   if (!detail) return res.status(404).json({ error: 'Tenant not found.' });
   res.json(detail);
+}));
+
+router.get('/:id/ledger/pdf', asyncHandler(async (req, res) => {
+  const detail = await data.tenantDetail(req.params.id);
+  if (!detail) return res.status(404).json({ error: 'Tenant not found.' });
+  const pdf = await tenantLedgerPdf(detail);
+  const safeName = String(detail.tenant.name || 'tenant').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="rentflow-ledger-${safeName || detail.tenant.id}.pdf"`);
+  res.send(pdf);
 }));
 
 router.post('/', auth.requireRole('admin', 'super_admin'), asyncHandler(async (req, res) => {

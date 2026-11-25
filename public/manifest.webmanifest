@@ -1,0 +1,19 @@
+{
+  "name": "RentFlow - Family Rent Manager",
+  "short_name": "RentFlow",
+  "description": "Shared family rent book: rooms, tenants, payments, dues, electricity, receipts and reports.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f7f5",
+  "theme_color": "#123c30",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

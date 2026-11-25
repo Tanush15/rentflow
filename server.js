@@ -27,6 +27,12 @@ app.disable('x-powered-by');
 app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
 const isProd = process.env.NODE_ENV === 'production';
+// The service worker must never be cached, or phones keep running an old app shell.
+app.get('/sw.js', (req, res) => {
+  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.type('application/javascript');
+  res.sendFile(path.join(__dirname, 'public', 'sw.js'));
+});
 app.use(express.static(path.join(__dirname, 'public'), {
   index: false,
   maxAge: isProd ? '1h' : 0,
