@@ -12,6 +12,7 @@ const db = require('./db');
 const auth = require('./auth');
 const share = require('./lib/share');
 const { asyncHandler } = require('./utils');
+const pkg = require('./package.json');
 
 const app = express();
 const server = http.createServer(app);
@@ -70,7 +71,13 @@ io.on('connection', (socket) => {
 app.get('/api/health', (req, res) => {
   // Public + CORS-enabled so the mobile app shell can validate a server URL.
   res.set('Access-Control-Allow-Origin', '*');
-  res.json({ ok: true, db: db.usePostgres ? 'postgres' : 'sqlite', at: Date.now() });
+  res.json({
+    ok: true,
+    db: db.usePostgres ? 'postgres' : 'sqlite',
+    version: pkg.version,
+    commit: process.env.RENDER_GIT_COMMIT || null,
+    at: Date.now(),
+  });
 });
 
 app.use('/api/auth', require('./routes/auth'));
